@@ -58,6 +58,9 @@ Die Videos in voller Auflösung: [Testmodus](docs/videos/testmodus.mp4) · [Einr
 
 ## Schnellstart
 
+> **Getestet nur unter Windows 11.** macOS und Linux sind nicht getestet: Die Skripte dafür sind vorbereitet,
+> aber auf keinem Mac und keinem Linux-Rechner ausprobiert.
+
 **Voraussetzungen:** Python 3.12 oder neuer ([python.org](https://www.python.org/downloads/)) und Google Chrome.
 
 1. **Holen:**
@@ -67,8 +70,8 @@ Die Videos in voller Auflösung: [Testmodus](docs/videos/testmodus.mp4) · [Einr
    oder als ZIP herunterladen und entpacken.
 2. **Einrichten:**
    - Windows: `einrichten.cmd` doppelklicken.
-   - macOS: `einrichten.command` doppelklicken (beim ersten Mal Rechtsklick → Öffnen).
-   - Linux: `sh einrichten.sh`.
+   - macOS (nicht getestet): `einrichten.command` doppelklicken (beim ersten Mal Rechtsklick → Öffnen).
+   - Linux (nicht getestet): `sh einrichten.sh`.
 
    Das Skript legt `.venv` an, installiert zwei Pakete, prüft Chrome, startet den Server und öffnet die
    **Anleitung in Chrome**. Dort geht es weiter: Street View (Google-Schlüssel) und Garmin, beides freiwillig, mit
@@ -149,8 +152,9 @@ Unter macOS und Linux dasselbe mit `sh start.sh …` bzw. `sh einrichten.sh …`
 
 - **Windows 11:** Einrichtung aus frischem Klon, Server, Anleitung, Testmodus und Katalog getestet.
   Noch offen im Demo: Street View mit echtem Schlüssel, Garmin-Anmeldung, echter Kickr, `--lan`.
-- **macOS:** noch nicht auf einem Mac getestet. Die Skripte sind POSIX-sh, die Pfade plattformneutral. Offene
-  Punkte stehen in der Anleitung unter „Prüfliste macOS“.
+- **macOS und Linux: nicht getestet.** Die Skripte sind POSIX-sh und mit shellcheck geprüft, die Pfade
+  plattformneutral, gelaufen sind sie aber auf keinem Mac und keinem Linux-Rechner. Offene Punkte stehen in der
+  Anleitung unter „Prüfliste macOS und Linux“.
 
 ## Daten und Lizenzen
 
