@@ -24,7 +24,7 @@ Connect an den Edge. Für den Testmodus brauchst du weder Kickr noch Edge.
 | Garmin-Connect-Konto | bringt den Kurs aus dem Katalog auf den Edge | nur mit Edge |
 | HF-Brustgurt (Bluetooth) | Puls in iRide; darf parallel per ANT+ am Edge hängen | freiwillig |
 | Google-Schlüssel (Maps JavaScript API) | Street View statt Karte | freiwillig |
-| Tablet im WLAN | zweite Anzeige über HTTPS (`--lan`) | freiwillig |
+| Tablet im WLAN | Anzeige auf dem Tablet über HTTPS (`--lan`); iPad nur mit Bluefy, siehe unten | freiwillig |
 
 **Ablauf einer Fahrt mit Kickr und Edge**
 
@@ -89,6 +89,33 @@ Der Knopf „Katalog“ zeigt die fünf Strecken mit Karte und Steigungsprofil:
 
 Später reicht `start.cmd` (Windows) bzw. `start.command` (macOS) bzw. `sh start.sh`.
 Die Anleitung bleibt erreichbar unter <http://localhost:8765/anleitung/> und über den Knopf „Anleitung“.
+
+## Browser: Chrome am Rechner, Bluefy auf dem iPad
+
+iRide spricht per **Web Bluetooth** mit Kickr und Brustgurt. Das können nur Browser mit Chromium-Engine.
+
+| Gerät | Browser | Kickr verbinden? | Adresse |
+|---|---|---|---|
+| Windows, Mac, Linux | **Chrome** oder Edge | ja | `http://localhost:8765/`, kein Zertifikat nötig |
+| Android-Tablet | **Chrome** | ja | `https://<IP>:8443/` mit `--lan`, CA installieren |
+| iPad, iPhone | Chrome, Safari, Firefox, Edge | **nein** | – |
+| iPad, iPhone | **Bluefy** (App Store) | ja | `https://<IP>:8443/` mit `--lan`, CA installieren und vertrauen |
+
+**Warum nicht Chrome auf dem iPad?** Chrome auf iPad und iPhone läuft mit Apples Safari-Engine (WebKit), wie alle
+gängigen iOS-Browser, und die kennt kein Web Bluetooth. Chrome auf dem iPad zeigt iRide an und kann den Testmodus fahren, aber der Knopf
+„Kickr verbinden“ tut nichts. Bluefy ist ein Browser, der Web Bluetooth auf iOS nachrüstet.
+
+**iPad mit Bluefy, Schritt für Schritt:**
+
+1. Am Rechner `start.cmd --lan` bzw. `sh start.sh --lan`. Das Terminal zeigt die Adressen mit der IP des Rechners.
+2. Auf dem iPad in **Safari** `http://<IP>:8765/ca.crt` öffnen, Profil laden; dann *Einstellungen → Allgemein →
+   VPN und Geräteverwaltung* installieren und *Einstellungen → Allgemein → Info → Zertifikatsvertrauenseinstellungen*
+   für „iRide Demo lokale CA“ einschalten.
+3. In **Bluefy** `https://<IP>:8443/` öffnen, „Kickr verbinden“, Kickr in der Liste wählen.
+4. *Einstellungen → Anzeige & Helligkeit → Automatische Sperre: Nie*, sonst geht das iPad während der Fahrt aus.
+
+Für den Google-Schlüssel kommt mit `--lan` die Adresse `https://<IP>:8443/*` zu den erlaubten Websites hinzu.
+Die Windows-Firewall fragt beim ersten `--lan`-Start, ob Python im privaten Netz erreichbar sein darf: zulassen.
 
 ## Was wo liegt
 

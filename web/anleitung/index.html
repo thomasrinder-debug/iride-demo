@@ -65,7 +65,9 @@
 
   <section id="browser">
     <h2><span class="nr">1</span> Browser: Chrome <span class="chip aus" id="cBrowser">…</span></h2>
-    <p>iRide spricht per <b>Web Bluetooth</b> mit dem Kickr, und das gibt es nur in <b>Chrome</b> (oder Edge), auf Windows, macOS, Linux und Android. Firefox und Safari können es nicht. Auf iPad und iPhone geht es nur mit einer Bluetooth-Browser-App (z. B. Bluefy), siehe Anhang.</p>
+    <p>iRide spricht per <b>Web Bluetooth</b> mit dem Kickr, und das gibt es nur in <b>Chrome</b> (oder Edge), auf Windows, macOS, Linux und Android. Firefox und Safari können es nicht.</p>
+    <h3>iPad und iPhone: Bluefy statt Chrome</h3>
+    <p>Chrome auf dem iPad läuft mit Apples Safari-Engine und hat deshalb <b>kein</b> Web Bluetooth: iRide und der Testmodus laufen, „Kickr verbinden“ aber nicht. Fürs iPad nimmst du <b>Bluefy</b> (App Store), einen Browser mit Web Bluetooth. Dafür braucht es HTTPS im WLAN: Server mit <code>--lan</code> starten, die CA einmal in Safari installieren und vertrauen, dann iRide in Bluefy öffnen (Anhang unten). Am iPad die automatische Sperre auf „Nie“ stellen.</p>
     <p id="browserText" class="klein"></p>
     <div class="hinweis" id="browserFehlt" hidden>Kein Chrome gefunden. Der Testmodus läuft auch in anderen Browsern, für den Kickr brauchst du Chrome: <a href="https://www.google.com/chrome/" target="_blank" rel="noopener">google.com/chrome</a>.</div>
     <h3>Nur auf dem Mac</h3>
@@ -156,7 +158,7 @@
       <ol>
         <li>Server mit <code>start.cmd --lan</code> bzw. <code>sh start.sh --lan</code> starten. Das Terminal zeigt die Adressen.</li>
         <li>Auf dem Tablet <code>http://&lt;IP&gt;:8765/ca.crt</code> öffnen und die CA installieren (iPad: Einstellungen → Allgemein → VPN und Geräteverwaltung, danach Info → Zertifikatsvertrauenseinstellungen einschalten).</li>
-        <li>Dann <code>https://&lt;IP&gt;:8443/</code> öffnen (Android: Chrome; iPad: Bluefy).</li>
+        <li>Dann <code>https://&lt;IP&gt;:8443/</code> öffnen: Android in Chrome, iPad in <b>Bluefy</b> (nicht Chrome oder Safari, die haben auf iOS kein Web Bluetooth).</li>
       </ol>
       <p class="klein">Auf dem Mac selbst braucht man das nicht. Soll ein Mac die CA trotzdem kennen: <code>ca.crt</code> aus <code>_zertifikat/</code> per Doppelklick in den Schlüsselbund, dort „Immer vertrauen“.</p>
     </details>
