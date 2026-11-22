@@ -37,6 +37,12 @@ Connect an den Edge. Für den Testmodus brauchst du weder Kickr noch Edge.
 
 ## So sieht es aus
 
+**Mit Street View: Alpe d'Huez**, km 10 unterhalb von Huez, 9,8 % Steigung (mit eigenem Google-Schlüssel):
+
+![Street View in iRide: Alpe d'Huez bei Huez, 9,8 % Steigung](docs/streetview.jpg)
+
+<sub>Street-View-Bild © Google, Karte © OpenStreetMap-Mitwirkende.</sub>
+
 **Testmodus auf Alpe d'Huez** (Zeitraffer 20×, Leistung auf 280 W hochgedreht):
 
 ![Testmodus auf Alpe d'Huez](docs/videos/testmodus.gif)
@@ -54,7 +60,7 @@ Connect an den Edge. Für den Testmodus brauchst du weder Kickr noch Edge.
 </details>
 
 Die Videos in voller Auflösung: [Testmodus](docs/videos/testmodus.mp4) · [Einrichtung](docs/videos/einrichtung.mp4) ·
-[Katalog](docs/videos/katalog.mp4). Aufgenommen ohne Google-Schlüssel, deshalb mit Karte statt Street View.
+[Katalog](docs/videos/katalog.mp4). Die Videos sind ohne Google-Schlüssel aufgenommen, deshalb mit Karte statt Street View.
 
 ## Schnellstart
 
