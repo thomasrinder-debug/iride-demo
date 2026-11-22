@@ -46,18 +46,18 @@ Connect an den Edge. Für den Testmodus brauchst du weder Kickr noch Edge.
 
 **Testmodus auf Alpe d'Huez** (Zeitraffer 20×, Leistung auf 280 W hochgedreht):
 
-![Testmodus auf Alpe d'Huez](docs/videos/testmodus.gif)
+![Testmodus auf Alpe d'Huez](docs/videos/testmodus.webp)
 
 <details>
 <summary><b>Einrichtung</b>: Anleitung mit Live-Status, ein Klick startet den ersten Kurs</summary>
 
-![Anleitung und Start](docs/videos/einrichtung.gif)
+![Anleitung und Start](docs/videos/einrichtung.webp)
 </details>
 
 <details>
 <summary><b>Katalog</b>: Strecken mit Karte und Steigungsprofil, „In iRide fahren“</summary>
 
-![Katalog](docs/videos/katalog.gif)
+![Katalog](docs/videos/katalog.webp)
 </details>
 
 Die Videos in voller Auflösung: [Testmodus](docs/videos/testmodus.mp4) · [Einrichtung](docs/videos/einrichtung.mp4) ·
