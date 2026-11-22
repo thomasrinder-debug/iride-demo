@@ -1,0 +1,14 @@
+# Lokale Einstellungen, Schlüssel, Tokens, Zertifikate – nie ins Repo
+lokal.py
+lokal.neu
+daten/
+_zertifikat/
+
+# Python-Umgebung
+.venv/
+__pycache__/
+*.pyc
+
+# Laufzeitdaten
+nutzer/
+logs/

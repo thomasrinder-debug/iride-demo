@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iRide Einrichtung</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d232b; --muted: #5d6875; --line: #dde2e8;
+    --accent: #1f6feb; --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e; --code: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1419; --panel: #171d24; --text: #e6edf3; --muted: #8b98a5; --line: #2a333d;
+            --accent: #58a6ff; --ok: #3fb950; --warn: #d29922; --bad: #f85149; --code: #222a33; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); line-height: 1.55;
+         font: 16px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 28px; margin: 8px 0 4px; }
+  h2 { font-size: 20px; margin: 0 0 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  h3 { font-size: 16px; margin: 18px 0 6px; }
+  p.unter { color: var(--muted); margin: 0 0 20px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin: 14px 0; }
+  .nr { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%;
+        background: var(--accent); color: #fff; font-size: 15px; flex: none; }
+  .chip { font-size: 13px; font-weight: 600; padding: 2px 10px; border-radius: 99px; border: 1px solid currentColor; }
+  .chip.ok { color: var(--ok); } .chip.warn { color: var(--warn); } .chip.bad { color: var(--bad); } .chip.aus { color: var(--muted); }
+  #leiste { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+  #leiste .chip { font-weight: 500; }
+  code, kbd { background: var(--code); border-radius: 5px; padding: 1px 6px; font-size: 14px; }
+  pre { background: var(--code); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-size: 14px; }
+  ol, ul { padding-left: 22px; } li { margin: 4px 0; }
+  a { color: var(--accent); }
+  .pruef { border-left: 4px solid var(--ok); padding: 6px 12px; background: color-mix(in srgb, var(--ok) 8%, transparent); border-radius: 0 8px 8px 0; margin: 12px 0 0; }
+  .hinweis { border-left: 4px solid var(--warn); padding: 6px 12px; background: color-mix(in srgb, var(--warn) 8%, transparent); border-radius: 0 8px 8px 0; margin: 12px 0 0; }
+  .zeile { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  input[type=text] { flex: 1 1 320px; min-width: 0; font: inherit; padding: 8px 10px; border-radius: 8px;
+                     border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  button, .knopf { font: inherit; font-weight: 600; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+                   background: var(--bg); color: var(--text); cursor: pointer; text-decoration: none; display: inline-block; }
+  button.primaer, .knopf.primaer { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #kurse { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; margin-top: 10px; }
+  #kurse a { display: block; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; text-decoration: none; color: var(--text); background: var(--bg); }
+  #kurse a:hover { border-color: var(--accent); }
+  #kurse b { display: block; color: var(--accent); font-size: 13px; }
+  #svTest { height: 0; border-radius: 8px; overflow: hidden; margin-top: 10px; }
+  #svTest.an { height: 220px; }
+  .klein { font-size: 14px; color: var(--muted); }
+  details summary { cursor: pointer; font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>iRide Demo einrichten</h1>
+  <p class="unter">Kickr-Anzeige mit Street View, Höhenprofil und Testmodus. Diese Seite zeigt live, was schon eingerichtet ist.</p>
+  <div id="leiste">
+    <span class="chip aus" id="sServer">Server …</span>
+    <span class="chip aus" id="sBrowser">Browser …</span>
+    <span class="chip aus" id="sGoogle">Street View …</span>
+    <span class="chip aus" id="sGarmin">Garmin …</span>
+    <span class="chip aus" id="sKurse">Kurse …</span>
+  </div>
+  <p class="klein" id="kein-server" hidden>Der Server läuft nicht, die Seite ist nur als Datei geöffnet. Starte <code>einrichten.cmd</code> (Windows) bzw. <code>einrichten.command</code> (Mac), dann lädt sie sich mit Status neu: <a href="http://localhost:8765/anleitung/">http://localhost:8765/anleitung/</a></p>
+
+  <section id="browser">
+    <h2><span class="nr">1</span> Browser: Chrome <span class="chip aus" id="cBrowser">…</span></h2>
+    <p>iRide spricht per <b>Web Bluetooth</b> mit dem Kickr, und das gibt es nur in <b>Chrome</b> (oder Edge), auf Windows, macOS, Linux und Android. Firefox und Safari können es nicht. Auf iPad und iPhone geht es nur mit einer Bluetooth-Browser-App (z. B. Bluefy), siehe Anhang.</p>
+    <p id="browserText" class="klein"></p>
+    <div class="hinweis" id="browserFehlt" hidden>Kein Chrome gefunden. Der Testmodus läuft auch in anderen Browsern, für den Kickr brauchst du Chrome: <a href="https://www.google.com/chrome/" target="_blank" rel="noopener">google.com/chrome</a>.</div>
+    <h3>Nur auf dem Mac</h3>
+    <p>Beim ersten Verbinden fragt macOS, ob Chrome Bluetooth nutzen darf: erlauben. Wenn nicht gefragt wird oder du abgelehnt hast: <i>Systemeinstellungen → Datenschutz &amp; Sicherheit → Bluetooth</i>, Chrome einschalten, Chrome neu starten.</p>
+    <div class="pruef"><b>Prüfpunkt:</b> Diese Seite ist in Chrome offen, und oben steht „Browser: Chrome“.</div>
+  </section>
+
+  <section id="google">
+    <h2><span class="nr">2</span> Street View (Google, freiwillig) <span class="chip aus" id="cGoogle">…</span></h2>
+    <p>Ohne Schlüssel läuft alles außer dem Street-View-Bild: Karte, Höhenprofil, Werte und Testmodus gehen trotzdem. Für Street View brauchst du einen eigenen Schlüssel für die <b>Maps JavaScript API</b>. Das dauert etwa 10 Minuten.</p>
+    <ol>
+      <li><a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Projekt anlegen</a> in der Google Cloud Console, Name z. B. <code>iride</code>.</li>
+      <li><a href="https://console.cloud.google.com/billing" target="_blank" rel="noopener">Abrechnungskonto</a> mit dem Projekt verbinden. Google verlangt das auch für die kostenlose Nutzung; für eine private Kickr-Anzeige reicht normalerweise das monatliche Freikontingent. Die aktuellen Preise stehen bei Google.</li>
+      <li><a href="https://console.cloud.google.com/apis/library/maps-backend.googleapis.com" target="_blank" rel="noopener">Maps JavaScript API aktivieren</a> (Knopf „Aktivieren“).</li>
+      <li><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Anmeldedaten</a> → „Anmeldedaten erstellen“ → „API-Schlüssel“.</li>
+      <li>Den Schlüssel <b>beschränken</b> (Stift-Symbol beim Schlüssel):
+        <ul>
+          <li>Anwendungseinschränkung: <i>Websites</i>, Einträge <code>http://localhost:8765/*</code> und <code>http://127.0.0.1:8765/*</code> (mit <code>--lan</code> zusätzlich <code>https://&lt;IP&gt;:8443/*</code>).</li>
+          <li>API-Einschränkung: nur <i>Maps JavaScript API</i>.</li>
+        </ul>
+      </li>
+      <li>Empfohlen: <a href="https://console.cloud.google.com/apis/api/maps-backend.googleapis.com/quotas" target="_blank" rel="noopener">Tageslimit</a> setzen, z. B. 1000 Aufrufe pro Tag. Dann kann nichts aus dem Ruder laufen.</li>
+      <li>Schlüssel hier einfügen und speichern. Er landet nur in <code>lokal.py</code> auf diesem Rechner, nie im Git.</li>
+    </ol>
+    <div class="zeile">
+      <input type="text" id="schluessel" placeholder="AIza…" autocomplete="off" spellcheck="false">
+      <button class="primaer" id="speichern">Speichern</button>
+      <button id="testen">Testen</button>
+    </div>
+    <p class="klein" id="googleMeldung"></p>
+    <div id="svTest"></div>
+    <div class="pruef"><b>Prüfpunkt:</b> „Testen“ zeigt ein Street-View-Bild aus Alpe d'Huez, oben steht „Street View: OK“.</div>
+  </section>
+
+  <section id="garmin">
+    <h2><span class="nr">3</span> Garmin (freiwillig) <span class="chip aus" id="cGarmin">…</span></h2>
+    <p>Damit schickt iRide eine Strecke aus dem Katalog als Kurs an deinen Garmin Edge („Fahren“ im Katalog). Ohne Garmin fährst du die Strecken genauso in iRide.</p>
+    <ol>
+      <li>Ins Terminal-Fenster der Einrichtung wechseln und <kbd>g</kbd> eingeben (oder später: <code>einrichten.cmd --garmin</code> bzw. <code>sh einrichten.sh --garmin</code>).</li>
+      <li>E-Mail, Passwort und, falls eingeschaltet, den MFA-Code eingeben. <b>Nur im Terminal</b>, nie auf einer Webseite.</li>
+      <li>Gespeichert werden nur die Anmelde-Tokens in <code>daten/garmin/</code>, nie das Passwort. Abmelden: den Ordner löschen.</li>
+    </ol>
+    <p class="klein">Die Bibliothek <code>garminconnect</code> ist inoffiziell. Ändert Garmin etwas, kann die Übertragung ausfallen; iRide selbst läuft weiter. Für die Übertragung muss ein Edge im Garmin-Konto aktiv sein.</p>
+    <div class="pruef"><b>Prüfpunkt:</b> Oben steht „Garmin: verbunden“ mit deinem Namen. Im Terminal testet <kbd>t</kbd> die Anmeldung.</div>
+  </section>
+
+  <section id="los">
+    <h2><span class="nr">4</span> Los geht's: Testmodus ohne Kickr</h2>
+    <p>Die fünf Demo-Kurse gehen von leicht bis Tour de France. Ein Klick lädt den Kurs und startet den Testmodus.</p>
+    <div id="kurse"></div>
+    <h3>Im Testmodus</h3>
+    <ul>
+      <li>Der Regler in der Leiste stellt die simulierte Leistung ein (50–450 W), daneben der Zeitraffer (1× bis 60×).</li>
+      <li>Puls und Trittfrequenz werden grob nachgebildet; das Tempo folgt aus Leistung, Steigung und Masse (<code>MASSE_SYSTEM</code> in <code>lokal.py</code>).</li>
+      <li>„Katalog“ zeigt die fünf Strecken mit Karte und Profil, „Anleitung“ führt hierher zurück.</li>
+    </ul>
+    <div class="pruef"><b>Prüfpunkt:</b> Nach „Moselweinstraße“ zählt die Distanz hoch, und der Punkt auf dem Höhenprofil wandert.</div>
+  </section>
+
+  <section id="kickr">
+    <h2><span class="nr">5</span> Mit dem echten Kickr</h2>
+    <ol>
+      <li>Kickr einschalten, Bluetooth am Rechner an. Die Wahoo-App darf nicht gleichzeitig verbunden sein.</li>
+      <li>In iRide (Chrome) „Kickr verbinden“, in der Liste den Kickr wählen. Ebenso „HF verbinden“ für den Brustgurt.</li>
+      <li>iRide liest Leistung, Tempo und Trittfrequenz vom Kickr und fährt damit den Kurs ab: Bild, Karte und Profil laufen mit.</li>
+    </ol>
+    <div class="hinweis"><b>Steigung am Kickr:</b> iRide ist eine Anzeige und stellt den Widerstand des Kickr nicht selbst ein. Die Steigung kommt von einem Garmin Edge, der denselben Kurs fährt („Strecke folgen“, Kickr als Fahrradtrainer gekoppelt). Den Kurs schickt „In iRide fahren“ im Katalog an den Edge (Schritt 3). Dann in iRide „Scharf“ tippen, am Edge starten, lostreten; mit „Edge-km“ gleichst du die Distanz ab, falls sie abweicht. Ohne Edge rollt der Kickr mit seinem Grundwiderstand, iRide zeigt die Fahrt trotzdem an.</div>
+    <p class="klein">Automatisch verbinden beim nächsten Öffnen: In Chrome <code>chrome://flags/#enable-web-bluetooth-new-permissions-backend</code> und <code>chrome://flags/#enable-experimental-web-platform-features</code> einschalten. Ohne die Flags tippst du einmal pro Gerät auf „Alle verbinden“.</p>
+    <div class="pruef"><b>Prüfpunkt:</b> Der Knopf zeigt „Kickr verbunden“, beim Treten erscheinen Watt und Tempo.</div>
+  </section>
+
+  <section id="hakt">
+    <h2>Wenn's hakt</h2>
+    <ul>
+      <li><b>„Port 8765 ist belegt“</b>: Läuft iRide schon in einem anderen Fenster? Sonst mit anderem Port starten: <code>start.cmd --http-port 18765</code>. Dann gilt die Google-Beschränkung für den neuen Port.</li>
+      <li><b>Kein „Kickr verbinden“-Dialog</b>: nicht Chrome/Edge, Bluetooth aus, oder (Mac) Chrome hat keine Bluetooth-Freigabe.</li>
+      <li><b>Street View bleibt grau</b>: API nicht aktiviert, Abrechnung fehlt oder die Website-Beschränkung passt nicht zur Adresse. „Testen“ zeigt den Grund.</li>
+      <li><b>Python fehlt / zu alt</b>: iRide braucht Python 3.12 oder neuer. macOS bringt nur 3.9 mit: <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">python.org</a> oder <code>brew install python@3.13</code>.</li>
+      <li><b>Mac: „kann nicht geöffnet werden“</b> beim Doppelklick auf <code>.command</code>: Rechtsklick → Öffnen, oder im Terminal <code>sh einrichten.sh</code>.</li>
+      <li><b>Neu anfangen</b>: <code>.venv</code>, <code>lokal.py</code> und <code>daten/</code> löschen, dann wieder einrichten. Außerhalb des Repo-Ordners wird nichts angelegt.</li>
+    </ul>
+  </section>
+
+  <section id="anhang">
+    <details>
+      <summary>Anhang: Tablet im WLAN (HTTPS)</summary>
+      <p>Ein Tablet erreicht den Rechner nicht über <code>localhost</code>, und Web Bluetooth braucht dann HTTPS. iRide bringt dafür eine eigene kleine Zertifizierungsstelle (CA) mit.</p>
+      <ol>
+        <li>Server mit <code>start.cmd --lan</code> bzw. <code>sh start.sh --lan</code> starten. Das Terminal zeigt die Adressen.</li>
+        <li>Auf dem Tablet <code>http://&lt;IP&gt;:8765/ca.crt</code> öffnen und die CA installieren (iPad: Einstellungen → Allgemein → VPN und Geräteverwaltung, danach Info → Zertifikatsvertrauenseinstellungen einschalten).</li>
+        <li>Dann <code>https://&lt;IP&gt;:8443/</code> öffnen (Android: Chrome; iPad: Bluefy).</li>
+      </ol>
+      <p class="klein">Auf dem Mac selbst braucht man das nicht. Soll ein Mac die CA trotzdem kennen: <code>ca.crt</code> aus <code>_zertifikat/</code> per Doppelklick in den Schlüsselbund, dort „Immer vertrauen“.</p>
+    </details>
+  </section>
+
+  <section id="mac">
+    <details>
+      <summary>Prüfliste macOS (noch nicht auf einem Mac getestet)</summary>
+      <p class="klein">Das Demo wurde unter Windows vollständig getestet. Diese Punkte sind auf dem Mac noch offen:</p>
+      <ul>
+        <li>☐ <code>einrichten.command</code> per Doppelklick startet (Gatekeeper-Abfrage: Rechtsklick → Öffnen).</li>
+        <li>☐ Python 3.12+ (python.org oder Homebrew) wird gefunden, <code>.venv</code> entsteht, Pakete installieren sich.</li>
+        <li>☐ Chrome wird gefunden und öffnet diese Seite.</li>
+        <li>☐ Testmodus fährt den leichten Kurs.</li>
+        <li>☐ Bluetooth-Freigabe für Chrome, Kickr verbindet.</li>
+        <li>☐ Garmin-Anmeldung im Terminal.</li>
+      </ul>
+    </details>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const imServer = location.protocol.startsWith("http");
+function chip(el, klasse, text) { el.className = "chip " + klasse; el.textContent = text; }
+const STUFE = /^(\d) ([^·]+)· (.+)$/;
+
+async function status() {
+  if (!imServer) { $("kein-server").hidden = false; chip($("sServer"), "bad", "Server: läuft nicht"); return; }
+  let s;
+  try { s = await (await fetch("/api/einrichtung", { cache: "no-store" })).json(); }
+  catch (e) { chip($("sServer"), "bad", "Server: nicht erreichbar"); return; }
+  chip($("sServer"), "ok", "Server: läuft (Python " + s.python + ")");
+  const chrome = /Chrome/.test(navigator.userAgent) && !/Edg\//.test(navigator.userAgent) ? "Chrome" : /Edg\//.test(navigator.userAgent) ? "Edge" : null;
+  const bt = !!navigator.bluetooth;
+  const bText = chrome ? `Browser: ${chrome}${bt ? "" : " (ohne Bluetooth)"}` : "Browser: kein Chrome";
+  chip($("sBrowser"), chrome && bt ? "ok" : "warn", bText);
+  chip($("cBrowser"), chrome && bt ? "ok" : "warn", chrome && bt ? "OK" : "prüfen");
+  $("browserText").textContent = (s.browser ? `Auf diesem Rechner gefunden: ${s.browser.name} (${s.browser.pfad}). ` : "Auf diesem Rechner kein Chrome/Edge gefunden. ")
+    + (chrome ? `Diese Seite läuft in ${chrome}` + (bt ? ", Web Bluetooth ist verfügbar." : ", aber Web Bluetooth fehlt (Bluetooth aus?).") : "Diese Seite läuft nicht in Chrome.");
+  $("browserFehlt").hidden = !!s.browser;
+  chip($("sGoogle"), s.google.gesetzt ? "ok" : "aus", s.google.gesetzt ? "Street View: Schlüssel …" + s.google.ende : "Street View: kein Schlüssel");
+  chip($("cGoogle"), s.google.gesetzt ? "ok" : "aus", s.google.gesetzt ? "eingetragen" : "übersprungen");
+  const g = s.garmin;
+  chip($("sGarmin"), g.angemeldet ? "ok" : "aus", g.angemeldet ? "Garmin: verbunden" + (g.name ? " (" + g.name + ")" : "") : "Garmin: nicht verbunden");
+  chip($("cGarmin"), g.angemeldet ? "ok" : "aus", g.angemeldet ? "verbunden" : "übersprungen");
+  chip($("sKurse"), s.kurse.length ? "ok" : "bad", s.kurse.length + " Kurse");
+  if (!$("kurse").childElementCount) kurseZeigen();
+}
+
+async function kurseZeigen() {
+  const kurse = await (await fetch("/api/kurse")).json();
+  $("kurse").replaceChildren(...kurse.map(k => {
+    const a = document.createElement("a"), m = k.name.match(STUFE);
+    a.href = "/?kurs=" + encodeURIComponent(k.datei) + "&sim=1";
+    if (m) { const b = document.createElement("b"); b.textContent = `${m[1]} · ${m[2].trim()}`; a.append(b); }
+    a.append(m ? m[3] : k.name);
+    return a;
+  }));
+}
+
+$("speichern").onclick = async () => {
+  const r = await fetch("/api/einrichtung/google", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ schluessel: $("schluessel").value.trim() }) });
+  const a = await r.json().catch(() => ({}));
+  $("googleMeldung").textContent = a.ok ? (a.gesetzt ? "Gespeichert. Jetzt „Testen“." : "Schlüssel entfernt.") : (a.fehler || "Fehler " + r.status);
+  if (a.ok) { $("schluessel").value = ""; status(); }
+};
+
+// Test: Maps JavaScript API mit dem gespeicherten Schlüssel laden und ein Panorama in Alpe d'Huez zeigen.
+// Ein einmal geladenes Google-Skript lässt sich nicht mit neuem Schlüssel laden, deshalb nach dem Speichern neu laden.
+let geladenMit = null;
+$("testen").onclick = async () => {
+  const cfg = await (await fetch("/api/config")).json();
+  if (!cfg.googleMapsKey) { $("googleMeldung").textContent = "Noch kein Schlüssel gespeichert."; return; }
+  if (geladenMit && geladenMit !== cfg.googleMapsKey) { location.hash = "google"; location.reload(); return; }
+  $("googleMeldung").textContent = "lade Google Maps …";
+  window.gm_authFailure = () => { $("googleMeldung").textContent = "Google lehnt den Schlüssel ab: API nicht aktiviert, Abrechnung fehlt oder die Website-Beschränkung passt nicht zu " + location.origin + "/*"; };
+  if (!geladenMit) {
+    geladenMit = cfg.googleMapsKey;
+    await new Promise((ok, fehler) => {
+      window.__svBereit = ok;
+      const s = document.createElement("script");
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(cfg.googleMapsKey)}&v=weekly&loading=async&callback=__svBereit`;
+      s.onerror = () => fehler(new Error("Skript nicht ladbar (offline?)"));
+      document.head.append(s);
+    }).catch(e => { $("googleMeldung").textContent = e.message; throw e; });
+  }
+  const { StreetViewPanorama, StreetViewService } = await google.maps.importLibrary("streetView");
+  new StreetViewService().getPanorama({ location: { lat: 45.0606, lng: 6.0376 }, radius: 200 }, (d, st) => {
+    if (st !== "OK") { $("googleMeldung").textContent = "Google antwortet, aber kein Panorama: " + st; return; }
+    $("svTest").classList.add("an");
+    new StreetViewPanorama($("svTest"), { pano: d.location.pano, addressControl: false, fullscreenControl: false });
+    $("googleMeldung").textContent = "Street View funktioniert.";
+  });
+};
+
+status();
+if (imServer) setInterval(status, 3000);
+</script>
+</body>
+</html>

@@ -1,0 +1,2447 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Kickr-Anzeige</title>
+<script>
+// Fehler sichtbar machen und ins Server-Log schicken (iPad hat keine Konsole)
+// „Script error. @:0“ kommt aus einem fremden Skript (Bluefys Bluetooth-Brücke, Google Maps): der Browser verbirgt
+// Text und Zeile. Deshalb geht der Zustand der Seite mit ins Protokoll (irideKontext, im Hauptblock gesetzt).
+// Das Band schließt sich nach FEHLER_BAND_MS oder per Antippen, damit es nicht die Leiste verdeckt.
+const FEHLER_BAND_MS = 20000;
+function fehlerMelden(text) {
+  let kontext = "";
+  try { if (typeof window.irideKontext === "function") kontext = " | " + window.irideKontext(); } catch (e) {}
+  try { fetch("fehler?" + encodeURIComponent((String(text) + kontext).slice(0, 500))); } catch (e) {}
+  const fremd = /^Script error\.?\s*@?:?0?$/.test(String(text).trim());
+  const zeigen = () => {
+    const d = document.createElement("div");
+    d.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99999;background:#b62324;color:#fff;font:16px sans-serif;padding:8px";
+    d.textContent = (fremd ? "Fehler in einem fremden Skript (Bluefy/Google), Zustand ist protokolliert" : "Fehler: " + text)
+      + " · antippen schließt";
+    d.onclick = () => d.remove();
+    setTimeout(() => d.remove(), FEHLER_BAND_MS);
+    document.body.appendChild(d);
+  };
+  document.body ? zeigen() : addEventListener("DOMContentLoaded", zeigen);
+}
+addEventListener("error", e => fehlerMelden(e.message + " @" + (e.filename || "").split("/").pop() + ":" + e.lineno));
+addEventListener("unhandledrejection", e => fehlerMelden("Promise: " + (e.reason && e.reason.message || e.reason)));
+fetch("fehler?start " + encodeURIComponent(navigator.userAgent + " bluetooth=" + !!navigator.bluetooth
+  + " getDevices=" + !!(navigator.bluetooth && navigator.bluetooth.getDevices)));
+</script>
+<link rel="stylesheet" href="vendor/leaflet.css">
+<script src="vendor/leaflet.js" onerror="fehlerMelden('Leaflet (vendor) nicht geladen')"></script>
+<script src="vendor/leaflet-rotate-src.js" onerror="fehlerMelden('leaflet-rotate (vendor) nicht geladen')"></script>
+<script src="vendor/hoehenlinien.js?v=3" onerror="fehlerMelden('hoehenlinien (vendor) nicht geladen')"></script>
+<style>
+  :root {
+    --bg: #101214; --panel: #1b1e22; --rand: #2c3138; --text: #eef1f4; --gedimmt: #8b949e;
+    --gruen: #3fb950; --gelb: #d29922; --orange: #f0883e; --rot: #f85149; --dunkelrot: #b62324;
+    --akzent: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden;
+    -webkit-user-select: none; user-select: none; }
+  /* Street View | Karte hochkant | Werte; ohne Panorama ist die Karte groß und die Mittelspalte entfällt */
+  body { display: grid; grid-template-columns: 1fr minmax(170px, 17vw) minmax(280px, 26vw);
+    grid-template-rows: auto 1fr 22vh; gap: 6px; padding: 6px;
+    padding-left: max(6px, env(safe-area-inset-left)); padding-right: max(6px, env(safe-area-inset-right)); }
+  body:has(#kartenslot.leer) { grid-template-columns: 1fr minmax(300px, 30vw); }
+  #leiste { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  #leiste button, #leiste select { font-size: 16px; padding: 8px 12px; border-radius: 8px;
+    border: 1px solid var(--rand); background: var(--panel); color: var(--text); }
+  #leiste button.an { background: var(--akzent); color: #000; border-color: var(--akzent); }
+  #leiste button.zurueck { font-size: 12px; padding: 4px 8px; opacity: .55; }
+  #leiste button.sucht { border-style: dashed; color: var(--gedimmt); }
+  #leiste button#btnAlle { background: var(--akzent); color: #000; border-color: var(--akzent); font-weight: 600; }
+  #leiste .gruppe { display: flex; gap: 4px; align-items: center; }
+  #status { color: var(--gedimmt); font-size: 14px; margin-left: auto; }
+  /* Leiste klappt beim Rollen weg (Zeile 1 des Grids fällt auf 0), Griff oben mittig holt sie zurück */
+  /* nicht display:none – sonst rücken Profil & Co. per Auto-Platzierung in Zeile 1 */
+  body.leisteZu #leiste { visibility: hidden; height: 0; overflow: hidden; }
+  #leisteGriff { display: none; position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 50;
+    padding: 2px 22px 6px; font-size: 16px; line-height: 1; border: 1px solid var(--rand); border-top: 0;
+    border-radius: 0 0 10px 10px; background: rgba(27,30,34,.55); color: var(--gedimmt); }
+  body.leisteZu #leisteGriff { display: block; }
+  body.leisteZu #hinweis { top: 30px; }
+  #simRegler { display: none; gap: 6px; align-items: center; font-size: 15px; }
+  #simRegler.an { display: flex; }
+  #simRegler input { width: 140px; }
+  #haupt { position: relative; border-radius: 10px; overflow: hidden; background: var(--panel); }
+  #sv, #sv2 { position: absolute; inset: 0; transition: opacity .8s ease-in-out, transform .25s linear; }
+  #sv { z-index: 1; }
+  #sv2 { opacity: 0; z-index: 0; }
+  /* Bewegung zwischen zwei Panoramen: leichtes Hineinzoomen per CSS (GPU, keine Google-Abfragen) */
+  #sv, #sv2 { transform-origin: 50% 55%; will-change: transform, opacity; }
+  #einblendung { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 26; display: none;
+    max-width: 78%; padding: 6px 16px; border-radius: 10px; background: rgba(16,18,20,.82); color: var(--text);
+    font-size: clamp(15px, 2.4vh, 24px); font-weight: 600; text-align: center; pointer-events: none; }
+  #einblendung.an { display: block; }
+  #einblendung small { display: block; font-size: .7em; font-weight: 400; color: var(--gedimmt); }
+  #geist { position: absolute; right: 10px; top: 10px; z-index: 12; display: none; padding: 4px 10px; border-radius: 8px;
+    background: rgba(16,18,20,.78); font-size: clamp(14px, 2.2vh, 22px); font-weight: 700; pointer-events: none;
+    font-variant-numeric: tabular-nums; }
+  #geist.an { display: block; } #geist.vor { color: var(--gruen); } #geist.hinter { color: var(--orange); }
+  #gipfel { position: absolute; inset: 0; z-index: 21; display: none; flex-direction: column; align-items: center;
+    justify-content: center; background: rgba(0,0,0,.5); text-align: center; pointer-events: none; }
+  #gipfel.an { display: flex; }
+  #gipfel b { font-size: 9vh; } #gipfel span { font-size: 4vh; font-weight: 700; } #gipfel small { font-size: 3vh; color: var(--gruen); }
+  body.overlay #einblendung { bottom: calc(9vh + 100px); }
+  body.overlay #geist { top: calc(8vh + 44px); }
+  #haupt > #karte { position: absolute; inset: 0; z-index: 5; }
+  #seite { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+  #kartenslot { border-radius: 10px; overflow: hidden; position: relative; min-height: 0; }
+  #kartenslot.leer { display: none; }
+  #kartenslot > #karte { position: absolute; inset: 0; }
+  #werte { flex: 1; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1.5fr repeat(4, 1fr);
+    gap: 6px; min-height: 0; }
+  .wert { background: var(--panel); border-radius: 10px; padding: 4px 10px; display: flex;
+    flex-direction: column; justify-content: center; min-height: 0; overflow: hidden; }
+  .wert .t { font-size: clamp(11px, 1.4vh, 16px); color: var(--gedimmt); text-transform: uppercase;
+    letter-spacing: .05em; }
+  .wert .z { font-size: clamp(20px, 4.4vh, 64px); font-weight: 700; font-variant-numeric: tabular-nums;
+    line-height: 1.05; white-space: nowrap; }
+  .wert .z small { font-size: .45em; font-weight: 500; color: var(--gedimmt); margin-left: 3px; }
+  .wert.gross { grid-column: 1 / 3; display: grid; grid-template-columns: auto 1fr;
+    grid-template-rows: auto 1fr; align-items: center; column-gap: 14px; }
+  .wert.gross .t { grid-column: 1 / 3; }
+  .wert.gross .u { white-space: normal; line-height: 1.15; color: var(--text); }
+  .wert.gross .z { font-size: clamp(28px, 7vh, 96px); }
+  #profil { grid-column: 1 / -1; background: var(--panel); border-radius: 10px; position: relative; }
+  #profil canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #hinweis { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 10; background: rgba(0,0,0,.6);
+    padding: 4px 10px; border-radius: 6px; font-size: 14px; color: var(--gedimmt); pointer-events: none; }
+  #hinweis:empty { display: none; }
+  #ausfall { position: absolute; left: 0; right: 0; top: 0; z-index: 30; display: none; padding: 14px;
+    background: rgba(182,35,36,.92); color: #fff; font-size: clamp(20px, 4vh, 40px); font-weight: 800;
+    text-align: center; }
+  #ausfall.an { display: block; }
+  #ausfall small { display: block; font-size: .5em; font-weight: 500; }
+  .wert .u { font-size: clamp(14px, 2.4vh, 28px); font-weight: 600; color: var(--gedimmt); white-space: nowrap; }
+  #wKurbel b { color: var(--text); font-variant-numeric: tabular-nums; }
+  #btnNeu { margin-left: 18px; position: relative; overflow: hidden; }
+  #btnNeu .balken { position: absolute; left: 0; bottom: 0; height: 4px; width: 0; background: var(--rot); }
+  #banner { position: absolute; inset: 0; z-index: 20; display: none; align-items: center;
+    justify-content: center; font-size: 8vh; font-weight: 800; background: rgba(0,0,0,.45); }
+  #banner.an { display: flex; }
+  .leaflet-container { background: #222; }
+  #leiste button.scharf { background: var(--gelb); color: #000; border-color: var(--gelb); }
+  #edgeDlg { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.6); }
+  #edgeDlg.an { display: flex; }
+  #edgeDlg .box { background: var(--panel); border: 1px solid var(--rand); border-radius: 14px; padding: 20px;
+    display: flex; flex-direction: column; gap: 14px; min-width: 340px; }
+  #edgeDlg .box div { font-size: 18px; color: var(--gedimmt); }
+  #edgeDlg input { font-size: 48px; padding: 8px 12px; width: 100%; border-radius: 10px; border: 1px solid var(--rand);
+    background: var(--bg); color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+  #edgeDlg .knoepfe { display: flex; gap: 12px; }
+  #edgeDlg button { flex: 1; font-size: 24px; padding: 16px; border-radius: 10px; border: 1px solid var(--rand);
+    background: var(--bg); color: var(--text); }
+  #edgeDlg button.ok { background: var(--akzent); color: #000; border-color: var(--akzent); }
+  /* Form: Kontroll-HF je Fahrt */
+  #formDlg { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.6); }
+  #formDlg.an { display: flex; }
+  #formDlg .box { background: var(--panel); border: 1px solid var(--rand); border-radius: 14px; padding: 20px;
+    display: flex; flex-direction: column; gap: 12px; width: min(720px, 94vw); max-height: 90vh; }
+  #formTitel { font-size: 18px; color: var(--gedimmt); }
+  #formTitel b { color: var(--text); font-size: 22px; }
+  #formKurve { width: 100%; height: 240px; background: var(--bg); border-radius: 10px; }
+  #formKurve text { fill: var(--gedimmt); font-size: 13px; }
+  #formListe { width: 100%; border-collapse: collapse; font-size: 16px; font-variant-numeric: tabular-nums; }
+  #formListe td { padding: 4px 8px; border-bottom: 1px solid var(--rand); }
+  #formListe td.z { text-align: right; }
+  #formDlg .tabelle { overflow-y: auto; }
+  #formZu { font-size: 22px; padding: 12px; border-radius: 10px; border: 1px solid var(--rand);
+    background: var(--bg); color: var(--text); }
+  /* Coaching: Kachelfarben, Ansage, Infozeile */
+  .wert.ok { background: #16361f; } .wert.warn { background: #3d2f0c; } .wert.alarm { background: #4a1416; }
+  .wert .pfeil { font-size: .8em; margin-left: 8px; }
+  /* Ansage als schmaler Streifen oben im Bild; die Leistungskachel zeigt die Warnung dauerhaft */
+  #coach { position: absolute; left: 50%; top: 36px; transform: translateX(-50%); z-index: 25; display: none;
+    padding: 3px 14px; border-radius: 8px; font-size: clamp(15px, 2.6vh, 26px); font-weight: 700;
+    text-align: center; max-width: 80%; opacity: .85; pointer-events: none; }
+  #coach.an { display: block; }
+  #coach.rot { background: rgba(182,35,36,.8); color: #fff; } #coach.gelb { background: rgba(210,153,34,.95); color: #000; }
+  #coach.blau { background: rgba(88,166,255,.95); color: #000; } #coach.gruen { background: rgba(63,185,80,.95); color: #000; }
+  #coachInfo { position: absolute; left: 8px; bottom: 8px; z-index: 12; background: rgba(0,0,0,.65); padding: 4px 10px;
+    border-radius: 6px; font-size: 14px; color: var(--text); pointer-events: none; }
+  #coachInfo:empty { display: none; }
+  /* Overlay (nur quer): Werte liegen über Street View bzw. der großen Karte, die Karte rechts wird breiter;
+     Steigung oben links, Strecke/Fahrzeit oben rechts, die übrigen Werte als Leiste unten */
+  @media (orientation: landscape) {
+    body.overlay { grid-template-columns: 1fr minmax(200px, 24vw); }
+    body.overlay:has(#kartenslot.leer) { grid-template-columns: 1fr; }
+    body.overlay #haupt { grid-column: 1; grid-row: 2; }
+    body.overlay #kartenslot { grid-column: 2; grid-row: 2; }
+    body.overlay #seite { grid-column: 1; grid-row: 2; z-index: 15; pointer-events: none; }
+    body.overlay #werte { padding: 8px; grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-rows: auto 1fr auto; grid-template-areas: "st st . . km zeit" ". . . . . ." "watt tempo kad hf rest hm"; }
+    body.overlay .wert { background: rgba(16,18,20,.72); padding: 2px 8px; }
+    body.overlay .wert.ok { background: rgba(22,54,31,.85); } body.overlay .wert.warn { background: rgba(61,47,12,.88); }
+    body.overlay .wert.alarm { background: rgba(140,25,28,.9); }
+    body.overlay .wert .z { font-size: clamp(18px, 4.2vh, 52px); }
+    body.overlay .wert.gross .z { font-size: clamp(28px, 7.5vh, 96px); }
+    body.overlay .wert:nth-child(1) { grid-area: st; }   body.overlay .wert:nth-child(2) { grid-area: watt; }
+    body.overlay .wert:nth-child(3) { grid-area: tempo; } body.overlay .wert:nth-child(4) { grid-area: kad; }
+    body.overlay .wert:nth-child(5) { grid-area: hf; }   body.overlay .wert:nth-child(6) { grid-area: km; }
+    body.overlay .wert:nth-child(7) { grid-area: zeit; } body.overlay .wert:nth-child(8) { grid-area: rest; }
+    body.overlay .wert:nth-child(9) { grid-area: hm; }
+    body.overlay .wert:nth-child(6) .z, body.overlay .wert:nth-child(7) .z { font-size: clamp(16px, 3.2vh, 36px); }
+    /* Coach-Ansage und -Info über die Leiste, Hinweis oben mittig bleibt */
+    body.overlay #coach { top: auto; bottom: calc(9vh + 64px); }
+    body.overlay #coachInfo { bottom: calc(9vh + 30px); }
+    /* große Karte: Knöpfe (◎, Ebenen) und Quellenangabe nicht unter den Kacheln */
+    body.overlay #haupt .leaflet-top { top: calc(8vh + 44px); }
+    body.overlay #haupt .leaflet-bottom { bottom: calc(5vh + 44px); }
+  }
+  @media (orientation: portrait) {
+    body, body:has(#kartenslot.leer) { grid-template-columns: 35% 1fr; grid-template-rows: auto 40vh 1fr 18vh; }
+    #haupt { grid-column: 1 / -1; }
+    body:has(#kartenslot.leer) #seite { grid-column: 1 / -1; }
+  }
+</style>
+</head>
+<body>
+<div id="leiste">
+  <select id="kurs" title="Strecke"></select>
+  <button id="btnFav" title="Favorit (oben in der Liste, beim Aufräumen geschützt)">☆</button>
+  <button id="btnKatalog" title="Streckenkatalog öffnen">Katalog</button>
+  <button id="btnAnleitung" title="Einrichtung und Anleitung">Anleitung</button>
+  <button id="btnForm" title="Kontroll-HF je Fahrt: Puls bei Referenzleistung aus dem Tagesform-Check">Form</button>
+  <button id="btnAlle" title="Kickr, HF-Gurt und Kurbel nacheinander verbinden (gemerkte Geräte)" hidden>Alle verbinden</button>
+  <button id="btnKickr">Kickr verbinden</button>
+  <button id="btnHf">HF verbinden</button>
+  <button id="btnKurbel" title="4iiii-Kurbel zum Vergleich mit den Kickr-Watt (nur Anzeige und Protokoll)">Kurbel verbinden</button>
+  <button id="btnSim" title="Fahrt ohne Kickr simulieren">Testmodus</button>
+  <span id="simRegler">
+    <input id="simWatt" type="range" min="50" max="450" step="5" value="200">
+    <span id="simWattZahl">200 W</span>
+    <select id="simRaffer" title="Zeitraffer">
+      <option value="1">1×</option><option value="5">5×</option>
+      <option value="20">20×</option><option value="60">60×</option>
+    </select>
+    <select id="simHf" title="Simulierte Tagesform: HF-Aufschlag">
+      <option value="0">HF ±0</option><option value="8">HF +8</option><option value="15">HF +15</option>
+    </select>
+  </span>
+  <button id="btnCoach" title="Coaching: Ansagen zu Leistung, HF, Schalten">Coach</button>
+  <button id="btnModus" title="Grundlage: festes Band · Berg: Ziel je Abschnitt aus dem Profil, letzter km alles raus">Grundlage</button>
+  <select id="bergW" title="Grundleistung im Berg-Modus"></select>
+  <button id="btnTon" title="Sprachansagen ein-/ausschalten">🔇 Sprache aus</button>
+  <span class="gruppe">
+    <button id="btnZurueck" title="100 m zurück">−100 m</button>
+    <button id="btnVor" title="100 m vor">+100 m</button>
+    <button id="btnNeu" hidden title="Gedrückt halten: zurück an den Start">⟲ Start (halten)<span class="balken"></span></button>
+    <button id="btnScharf" title="Auf 0 setzen, zählt ab dem ersten Tritt">Scharf</button>
+    <button id="btnEdge" title="Distanz vom Edge übernehmen">Edge-km</button>
+    <button id="btnProfil" title="Ausschnitt des Höhenprofils">Profil 2 km</button>
+    <button id="btnBlick" title="Street View: vorn (90°) oder weit (~130°, Seiten im Bild)">Blick vorn</button>
+    <button id="btnOverlay" title="Werte über Street View legen (nur quer)">Overlay</button>
+  </span>
+  <span id="status">nicht verbunden</span>
+</div>
+
+<button id="leisteGriff" title="Knöpfe einblenden">▾</button>
+
+<div id="haupt">
+  <div id="sv"></div>
+  <div id="sv2"></div>
+  <div id="hinweis"></div>
+  <div id="banner">Ziel erreicht</div>
+  <div id="gipfel"></div>
+  <div id="einblendung"></div>
+  <div id="geist"></div>
+  <div id="coach"></div>
+  <div id="coachInfo"></div>
+  <div id="ausfall">KEINE DATEN VOM KICKR – Position steht<small id="ausfallText"></small></div>
+</div>
+
+<div id="kartenslot"><div id="karte"></div></div>
+<div id="seite">
+  <div id="werte">
+    <div class="wert gross"><span class="t">Steigung</span><span class="z" id="wSteigung">–</span><span class="u" id="wVoraus"></span></div>
+    <div class="wert" id="kWatt"><span class="t" id="tWatt">Leistung</span><span class="z" id="wWatt">–</span><span class="u" id="wKurbel" hidden></span></div>
+    <div class="wert"><span class="t">Tempo</span><span class="z" id="wTempo">–</span></div>
+    <div class="wert"><span class="t">Kadenz</span><span class="z" id="wKadenz">–</span></div>
+    <div class="wert" id="kHf"><span class="t" id="tHf">Herzfrequenz</span><span class="z" id="wHf">–</span></div>
+    <div class="wert"><span class="t">Strecke</span><span class="z" id="wKm">–</span></div>
+    <div class="wert"><span class="t">Fahrzeit</span><span class="z" id="wZeit">0:00:00</span></div>
+    <div class="wert"><span class="t">Rest</span><span class="z" id="wRestKm">–</span></div>
+    <div class="wert"><span class="t">Rest ↑</span><span class="z" id="wRestHm">–</span></div>
+  </div>
+</div>
+
+<div id="profil"><canvas id="leinwand"></canvas></div>
+
+<div id="edgeDlg">
+  <div class="box">
+    <div>Distanz laut Edge (km) · iRide steht bei <span id="edgeIst">–</span></div>
+    <input id="edgeKm" type="text" inputmode="decimal" autocomplete="off">
+    <div class="knoepfe"><button id="edgeAbbr">Abbrechen</button><button id="edgeOk" class="ok">Übernehmen</button></div>
+  </div>
+</div>
+
+<div id="formDlg">
+  <div class="box">
+    <div id="formTitel"></div>
+    <svg id="formKurve" viewBox="0 0 640 240" preserveAspectRatio="none"></svg>
+    <div class="tabelle"><table id="formListe"></table></div>
+    <button id="formZu">Schließen</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+{ // eigener Block: keine globalen Namen, die mit Bluefys eingeschleustem Skript kollidieren
+// ------------------------------------------------------------------ Konstanten
+const UUID = n => `0000${n.toString(16).padStart(4, "0")}-0000-1000-8000-00805f9b34fb`;
+const FTMS = UUID(0x1826), INDOOR_BIKE_DATA = UUID(0x2ad2), FTMS_STATUS = UUID(0x2ada);
+const CPS = UUID(0x1818), CP_MESSUNG = UUID(0x2a63);
+// Der Edge setzt das Kursprofil am Kickr rund 60 m später um als die gefahrene Distanz (gemessen 14.10.2026,
+// Misaka-Pass: in allen Abschnitten +40…+100 m, meist +60 m). Alles Sichtbare (Street View, Karte, Profil,
+// Steigung, Rampen, Coach) zeigt deshalb diese Stelle; „Strecke“ und das Protokoll bleiben die echte Distanz.
+// Im Testmodus rechnet iRide selbst, dort kein Versatz.
+const KICKR_VERZUG_M = 0;    // seit 14.10.: Edge bekommt _edge.gpx mit um 60 m vorgezogenem Profil (Skripte/edge_gpx.py)
+const pos = () => Math.max(0, z.dist - (z.sim ? 0 : KICKR_VERZUG_M));
+// Akku-Sparmodus (15.10.): vorher 10 m / 2 s – 1.363 Panoramen in 69 min leerten den iPad-Akku.
+// 14.11.: 15 m / 3,5 s mit Vorausladen; höchstens ~17 Wechsel/min (Sparmodus bisher 15/min ab 22 km/h).
+const SV_ABSTAND = 15;        // m zwischen Street-View-Abfragen (Google-Panoramen liegen ~8–12 m auseinander)
+const SV_RADIUS = 25;         // m Suchradius für das nächste Panorama
+const SV_SPUR = 20;           // m: weiter neben der Position liegende Panoramen gehören zu einer anderen Straße
+                              //    (in Serpentinen oft der Schenkel darüber/darunter) und werden verworfen
+const SV_SEITE = 4;           // m neben der Linie suchen: bevorzugt die Panorama-Spur auf der eigenen Fahrbahnseite
+// Fahrtrichtung (22.10.): tiles.centerHeading ist die Fahrtrichtung des Google-Autos. Weicht sie mehr als 90° von
+// der eigenen ab (Auto fuhr bergab = Bild von der Gegenspur), werden ältere Aufnahmen derselben Stelle und die Spur
+// weiter rechts probiert. getPanorama kostet nichts extra (Messwerte 22.10.: nur das Laden der Seite zählt).
+const SV_ALTERNATIVEN = 3;    // höchstens so viele ältere Aufnahmen derselben Stelle prüfen, neueste zuerst
+const SV_ALT_AB = 2014;       // ältere Aufnahmen (schlechte Kamera) nicht als Ersatz nehmen
+// Linksverkehr: Katalogkurse heißen Katalog_<land>-…; dort die linke Seite nehmen
+const LINKSVERKEHR = ["gb", "ie", "jp", "au", "nz", "za", "in", "th", "my", "id", "cy", "mt", "ke", "lk", "sg", "hk", "mu"];
+const SV_KURVE = 25;          // ° Richtungsänderung auf 15 m, ab der als Kurve gilt: dann doppelt so oft abfragen
+const SV_MIN_MS = 2000;       // ms zwischen zwei Wechseln (Akku: 10 s statt 3,5 s sparten nur 0,4 W, Messung 15.11.; ~2 s braucht das Nachladen)
+const SV_HORIZONT = 150;      // m: so weit voraus werden Panoramen gesucht (Vorrat)
+const SV_BLENDE_MS = 800;     // ms Überblendung: neues Bild über dem alten einblenden (kein Helligkeitsloch)
+const SV_RENDER_MS = 400;     // ms Reserve nach status_changed (die API meldet nicht, wann die Kacheln gezeichnet sind)
+const SV_TIEFE = 90;          // m: Bildtiefe für den Zoom zwischen zwei Panoramen, Skala = T / (T − gefahrene m)
+const KB_MAX = 1.3;           // Deckel, falls das nächste Panorama auf sich warten lässt (Bild wird sonst weich)
+const ANZEIGE_MS = 1000;      // ms zwischen zwei Neuzeichnungen von Werten, Karte und Profil (Akku; vorher bei jedem Takt, 200 ms)
+// aktuelles Panorama, Wechselzähler (Kostenkontrolle), Blickrichtung für die Animation
+// sv: das sichtbare Panorama (Werte erst beim tatsächlichen Wechsel übernommen)
+const sv = { id: null, zahl: 0, gegen: 0, distWechsel: 0, zeitWechsel: 0, heading: null, zielHeading: 0, zielPitch: 0,
+             panoD: 0, skala: 1, datum: "" };
+// svv: Vorrat vorausgesuchter Panoramen {d, id, heading, pitch, datum, gegen}, nach Streckenposition; id null = keins
+const svv = { gen: 0, frei: true, bis: -1e9, liste: [], fehler: 0, pause: 0 };
+// svh: hinteres Fenster (leer | laedt | bereit | blende)
+const svh = { kand: null, status: "leer" };
+const STEIGUNG_FENSTER = 50;  // m vor und hinter der Position
+const RADUMFANG = 2.105;      // m, nur für den CPS-Notbehelf
+const VERALTET_MS = 3000;     // ohne neue Daten gilt Tempo 0
+const KICKR_STILLE_MS = 10000, KICKR_WACHE_MS = 30000;   // kickrWache(): stiller Kickr → neu verbinden
+let kickrWacheZuletzt = 0;
+
+// ------------------------------------------------------------------ Zustand
+const z = {
+  kurs: null, kursName: "", dist: 0, fahrzeit: 0,
+  tempo: null, watt: null, kadenz: null, datenZeit: 0,
+  hf: null, hfZeit: 0, hfQuelle: "",       // Herzfrequenz: Brustgurt (BLE) oder vom Kickr weitergereicht
+  wattKurbel: null, kadKurbel: null, kurbelZeit: 0,   // 4iiii-Kurbel (BLE Cycling Power), nur Vergleich, steuert nichts
+  kickrSteigung: null, kickrSteigungZeit: 0,           // vom Edge gesetzte SIM-Steigung (FTMS-Status 0x12)
+  scharf: false,                           // wartet auf den ersten Tritt, dann zählt die Strecke ab 0
+  kickrDistAlt: null, kickrDistDa: false, kickrDistZeit: 0,  // FTMS-Gesamtdistanz des Kickr, falls er sie sendet
+  sim: false, simWatt: 200, simRaffer: 1, simHfPlus: 0,
+  masse: 90, svAn: false, svStatus: "aus",
+};
+const $ = id => document.getElementById(id);
+const status = t => { $("status").textContent = t; };
+// Zeile ins Server-Log (/log); Fehler beim Senden stören die Fahrt nicht
+const protokoll = text => { fetch("log?" + text).catch(() => {}); };
+
+// ------------------------------------------------------------------ Geometrie
+const RAD = Math.PI / 180;
+function abstand(a, b) {
+  const dLat = (b.lat - a.lat) * RAD, dLon = (b.lon - a.lon) * RAD;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * RAD) * Math.cos(b.lat * RAD) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+}
+function kurswinkel(a, b) {
+  const y = Math.sin((b.lon - a.lon) * RAD) * Math.cos(b.lat * RAD);
+  const x = Math.cos(a.lat * RAD) * Math.sin(b.lat * RAD) -
+            Math.sin(a.lat * RAD) * Math.cos(b.lat * RAD) * Math.cos((b.lon - a.lon) * RAD);
+  return (Math.atan2(y, x) / RAD + 360) % 360;
+}
+// Kürzeste Drehung von a nach b in Grad, −180 … 180. Doppeltes Modulo, weil % in JS das Vorzeichen behält:
+// (soll − ist + 540) % 360 wird negativ, sobald soll − ist < −540 (Kartenpeilung 0…360, Sollwert −360…0)
+const winkelDiff = (a, b) => ((b - a) % 360 + 540) % 360 - 180;
+
+function gpxLesen(text) {
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  let knoten = [...doc.getElementsByTagName("trkpt")];
+  if (!knoten.length) knoten = [...doc.getElementsByTagName("rtept")];
+  const pts = [];
+  for (const k of knoten) {
+    const e = k.getElementsByTagName("ele")[0];
+    const p = { lat: +k.getAttribute("lat"), lon: +k.getAttribute("lon"), ele: e ? +e.textContent : 0 };
+    if (pts.length) {
+      const s = abstand(pts[pts.length - 1], p);
+      if (s < 0.01) continue;
+      p.d = pts[pts.length - 1].d + s;
+    } else p.d = 0;
+    pts.push(p);
+  }
+  let hoch = 0;
+  pts.forEach((p, i) => { if (i) hoch += Math.max(0, p.ele - pts[i - 1].ele); p.hoch = hoch; });
+  const name = doc.getElementsByTagName("name")[0];
+  // Künstliche Anfahrt (kickr_anstieg/kurs_katalog): flaches Stück mit exakt gleicher Höhe am Anfang
+  let anfahrt = 0;
+  for (const q of pts) { if (Math.abs(q.ele - pts[0].ele) > 0.05) break; anfahrt = q.d; }
+  if (anfahrt < 500 || anfahrt > pts[pts.length - 1].d / 2) anfahrt = 0;   // kein echter Vorlauf
+  return { pts, laenge: pts[pts.length - 1].d, hoch, anfahrt, name: name ? name.textContent : "" };
+}
+
+function index(d) {  // letzter Punkt mit p.d <= d
+  const pts = z.kurs.pts;
+  let lo = 0, hi = pts.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (pts[m].d <= d) lo = m; else hi = m; }
+  return lo;
+}
+function punkt(d) {
+  const pts = z.kurs.pts;
+  d = Math.max(0, Math.min(z.kurs.laenge, d));
+  const i = index(d), a = pts[i], b = pts[Math.min(i + 1, pts.length - 1)];
+  const f = b.d > a.d ? (d - a.d) / (b.d - a.d) : 0;
+  return { lat: a.lat + f * (b.lat - a.lat), lon: a.lon + f * (b.lon - a.lon),
+           ele: a.ele + f * (b.ele - a.ele), hoch: a.hoch + f * (b.hoch - a.hoch) };
+}
+function steigung(d) {
+  const L = z.kurs.laenge;
+  const a = Math.max(0, d - STEIGUNG_FENSTER), b = Math.min(L, d + STEIGUNG_FENSTER);
+  return b > a ? (punkt(b).ele - punkt(a).ele) / (b - a) : 0;
+}
+
+// ------------------------------------------------------------------ Karte
+// Karte dreht mit der Fahrtrichtung (wie das Street-View-Foto); Plugin leaflet-rotate, ohne es bleibt Norden oben
+const karte = L.map("karte", { zoomControl: false, attributionControl: true,
+  rotate: true, bearing: 0, touchRotate: false, rotateControl: false }).setView([0, 0], 2);
+const osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(karte);
+const satellit = L.tileLayer(
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom: 19, attribution: "Esri World Imagery" });
+// Höhenlinien 10 m / 50 m (ab Zoom 13), standardmäßig an, abwählbar; Wahl bleibt gespeichert
+const hoehenlinien = L.gridLayer.hoehenlinien();
+L.control.layers({ "Karte": osm, "Satellit": satellit }, { "Höhenlinien": hoehenlinien }, { position: "topright" }).addTo(karte);
+karte.on("baselayerchange", e => hoehenlinien.setHell(e.layer === satellit));
+karte.on("overlayadd overlayremove", e => {
+  if (e.layer === hoehenlinien) try { localStorage.setItem("iride.hoehenlinien", e.type === "overlayadd" ? "1" : "0"); } catch (x) {}
+});
+try { if (localStorage.getItem("iride.hoehenlinien") !== "0") hoehenlinien.addTo(karte); } catch (e) { hoehenlinien.addTo(karte); }
+let spur = null, startM = null, zielM = null;
+const posM = L.circleMarker([0, 0], { radius: 9, color: "#fff", weight: 3, fillColor: "#f85149", fillOpacity: 1 });
+const geistM = L.circleMarker([0, 0], { radius: 8, color: "#fff", weight: 2, fillColor: "#8b949e", fillOpacity: .9 });
+let folgen = true;
+karte.on("dragstart", () => { folgen = false; });
+const FolgenKnopf = L.Control.extend({
+  onAdd() {
+    const b = L.DomUtil.create("button");
+    b.textContent = "◎"; b.title = "Position folgen";
+    b.style.cssText = "font-size:22px;width:40px;height:40px;border-radius:8px;border:0;";
+    L.DomEvent.on(b, "click", e => { L.DomEvent.stop(e); folgen = true; zeichnen(true); });
+    return b;
+  }
+});
+new FolgenKnopf({ position: "topleft" }).addTo(karte);
+
+function karteKurs() {
+  if (spur) spur.remove(); if (startM) startM.remove(); if (zielM) zielM.remove();
+  const ll = z.kurs.pts.map(p => [p.lat, p.lon]);
+  spur = L.polyline(ll, { color: "#58a6ff", weight: 5, opacity: .9 }).addTo(karte);
+  startM = L.circleMarker(ll[0], { radius: 6, color: "#3fb950", fillOpacity: 1 }).addTo(karte);
+  zielM = L.circleMarker(ll[ll.length - 1], { radius: 6, color: "#000", fillColor: "#fff", fillOpacity: 1 }).addTo(karte);
+  posM.addTo(karte);
+  karte.invalidateSize();
+  karte.fitBounds(spur.getBounds(), { padding: [20, 20] });
+  folgen = true;
+}
+
+// Karte groß (kein Street View) oder klein in der Seitenspalte
+function layout(mitSv) {
+  z.svAn = mitSv;
+  const ziel = mitSv ? $("kartenslot") : $("haupt");
+  if ($("karte").parentElement !== ziel) ziel.appendChild($("karte"));
+  $("kartenslot").classList.toggle("leer", !mitSv);
+  setTimeout(() => karte.invalidateSize(), 50);
+}
+
+// ------------------------------------------------------------------ Höhenprofil
+const leinwand = $("leinwand");
+let profilBild = null;
+const farbe = s => s < 0.02 ? "#3fb950" : s < 0.04 ? "#d29922" : s < 0.06 ? "#f0883e" : s < 0.08 ? "#f85149" : "#b62324";
+const RAND = { l: 48, r: 12, o: 10, u: 22 };
+
+// Ausschnitt in m (0 = ganze Strecke); 25 % hinter, 75 % vor der Position
+const PROFIL_STUFEN = [1000, 2000, 5000, 0];
+let profilStufe = 1;
+try {
+  const t = localStorage.getItem("iride.profilStufe"), g = t === null ? NaN : +t;
+  if (g >= 0 && g < PROFIL_STUFEN.length) profilStufe = g;
+} catch (e) {}
+const UEBERSICHT = 16;   // px Höhe des Streifens mit der ganzen Strecke
+
+function profilVorbereiten() {
+  const r = window.devicePixelRatio || 1;
+  const W = leinwand.clientWidth, H = leinwand.clientHeight;
+  leinwand.width = W * r; leinwand.height = H * r;
+  profilBild = (!z.kurs || W < 50 || H < 30) ? null : { W, H };
+  $("btnProfil").textContent = PROFIL_STUFEN[profilStufe] ? `Profil ${PROFIL_STUFEN[profilStufe] / 1000} km` : "Profil ganz";
+}
+
+// Sichtbarer Bereich [von, bis] in m
+function profilFenster() {
+  const L_ = z.kurs.laenge, F = PROFIL_STUFEN[profilStufe];
+  if (!F || F >= L_) return [0, L_];
+  let von = pos() - F * 0.25;
+  von = Math.max(0, Math.min(L_ - F, von));
+  return [von, von + F];
+}
+
+function profilZeichnen() {
+  const g = leinwand.getContext("2d"), r = window.devicePixelRatio || 1;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.clearRect(0, 0, leinwand.width, leinwand.height);
+  if (!profilBild) return;
+  g.scale(r, r);
+  const { W, H } = profilBild, L_ = z.kurs.laenge;
+  const [von, bis] = profilFenster(), ganz = von === 0 && bis === L_;
+  const oben = ganz ? RAND.o : UEBERSICHT + 8;
+  // ein Profil über die volle Breite (seit 21.11.2026; vorher rechts ein zweiter Ausschnitt der nächsten 2 km)
+  const breite = W - RAND.l - RAND.r;
+  profilBild.breite = breite;
+
+  // Höhenbereich nur aus dem Ausschnitt, mindestens 30 m Spanne
+  const n = Math.max(2, Math.round(breite / 3)), schritt = (bis - von) / n;
+  let min = Infinity, max = -Infinity;
+  for (let i = 0; i <= n; i++) { const e = punkt(von + i * schritt).ele; min = Math.min(min, e); max = Math.max(max, e); }
+  const spanne = Math.max(30, max - min);
+  min -= spanne * .08; max += spanne * .12;
+  const x = d => RAND.l + (d - von) / (bis - von) * breite;
+  const y = e => H - RAND.u - (e - min) / (max - min) * (H - oben - RAND.u);
+  profilBild.x = x; profilBild.von = von; profilBild.bis = bis;
+
+  // Fläche, eingefärbt nach Steigung
+  for (let i = 0; i < n; i++) {
+    const d1 = von + i * schritt, d2 = d1 + schritt, e1 = punkt(d1).ele, e2 = punkt(d2).ele;
+    g.fillStyle = farbe((e2 - e1) / (d2 - d1));
+    g.beginPath(); g.moveTo(x(d1), H - RAND.u); g.lineTo(x(d1), y(e1)); g.lineTo(x(d2) + .5, y(e2));
+    g.lineTo(x(d2) + .5, H - RAND.u); g.closePath(); g.fill();
+  }
+  // Gefahrener Teil abgedunkelt
+  const X = x(pos()), p = punkt(pos());
+  g.fillStyle = "rgba(0,0,0,.35)"; g.fillRect(RAND.l, oben, Math.max(0, X - RAND.l), H - oben - RAND.u);
+
+  // Achsen
+  g.fillStyle = "#8b949e"; g.font = "13px -apple-system, Segoe UI, sans-serif";
+  g.textAlign = "right"; g.textBaseline = "middle";
+  const hs = (max - min) > 300 ? 100 : (max - min) > 120 ? 50 : (max - min) > 50 ? 20 : 10;
+  for (let e = Math.ceil(min / hs) * hs; e <= max; e += hs) {
+    g.fillText(e + " m", RAND.l - 6, y(e));
+    g.strokeStyle = "rgba(255,255,255,.08)"; g.beginPath(); g.moveTo(RAND.l, y(e)); g.lineTo(W - RAND.r, y(e)); g.stroke();
+  }
+  g.textAlign = "center"; g.textBaseline = "top";
+  const sp = bis - von, ks = sp > 20000 ? 5000 : sp > 8000 ? 2000 : sp > 3000 ? 1000 : sp > 1500 ? 500 : 200;
+  for (let d = Math.ceil(von / ks) * ks; d <= bis; d += ks)
+    g.fillText((d / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " km", x(d), H - RAND.u + 4);
+
+  // Position
+  g.strokeStyle = "#fff"; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(X, oben); g.lineTo(X, H - RAND.u); g.stroke();
+  g.fillStyle = "#f85149"; g.beginPath(); g.arc(X, y(p.ele), 7, 0, 2 * Math.PI); g.fill();
+  g.strokeStyle = "#fff"; g.stroke();
+  g.fillStyle = "#eef1f4"; g.font = "bold 15px -apple-system, Segoe UI, sans-serif";
+  const rechts = X > W / 2;
+  g.textAlign = rechts ? "right" : "left"; g.textBaseline = "top";
+  g.fillText(`${Math.round(p.ele)} m · ${zahl(z.dist / 1000, 2)} km`, X + (rechts ? -10 : 10), oben + 24);
+
+  // Steigung je Abschnitt (500 m, bei großem Ausschnitt so weit wie die km-Achse) unten im Profil,
+  // im Berg-Modus darüber die Zielwatt
+  const abs = Math.max(500, ks);
+  g.font = "bold 13px -apple-system, Segoe UI, sans-serif"; g.textAlign = "center"; g.textBaseline = "bottom";
+  for (let d = Math.floor(von / abs) * abs; d < bis; d += abs) {
+    const a = Math.max(von, d), b = Math.min(bis, d + abs);
+    if (b - a < abs / 2 || x(b) - x(a) < 38) continue;
+    const s = (punkt(b).ele - punkt(a).ele) / (b - a), xm = (x(a) + x(b)) / 2;
+    g.fillStyle = "rgba(0,0,0,.55)"; g.fillRect(xm - 24, H - RAND.u - 20, 48, 18);
+    g.fillStyle = "#eef1f4"; g.fillText(`${zahl(s * 100, 1)} %`, xm, H - RAND.u - 4);
+    if (co.plan) {
+      const zl = co.plan.ziel.slice(Math.floor(a / 100), Math.min(co.plan.ziel.length, Math.ceil(b / 100)));
+      if (zl.length) { g.fillStyle = "#58a6ff"; g.fillText(`${Math.round(zl.reduce((u, v) => u + v, 0) / zl.length)} W`, xm, H - RAND.u - 24); }
+    }
+  }
+  // Kopfzeile rechts: Gipfel oder Ziel
+  const gi = z.kurs.gipfel, ziel = gi > pos() + 30 ? gi : L_;
+  const rest = Math.max(0, ziel - pos()), hm = Math.max(0, punkt(ziel).ele - punkt(pos()).ele);
+  g.fillStyle = "#eef1f4"; g.font = "bold 16px -apple-system, Segoe UI, sans-serif";
+  g.textAlign = "right"; g.textBaseline = "top";
+  g.fillText(`${ziel === gi ? "Gipfel" : "Ziel"} in ${zahl(rest / 1000, 1)} km · ${zahl(hm)} hm`, W - RAND.r, oben + 2);
+
+  // Übersicht: ganze Strecke als Streifen, Ausschnitt markiert
+  if (!ganz) {
+    const ux = d => RAND.l + d / L_ * breite, uh = UEBERSICHT, un = Math.max(2, Math.round(breite / 4));
+    let umin = Infinity, umax = -Infinity;
+    for (let i = 0; i <= un; i++) { const e = punkt(i / un * L_).ele; umin = Math.min(umin, e); umax = Math.max(umax, e); }
+    const uy = e => 2 + uh - (e - umin) / Math.max(1, umax - umin) * uh;
+    g.fillStyle = "rgba(139,148,158,.45)"; g.beginPath(); g.moveTo(ux(0), uh + 2);
+    for (let i = 0; i <= un; i++) { const d = i / un * L_; g.lineTo(ux(d), uy(punkt(d).ele)); }
+    g.lineTo(ux(L_), uh + 2); g.closePath(); g.fill();
+    g.strokeStyle = "#58a6ff"; g.lineWidth = 1.5; g.strokeRect(ux(von), 1, ux(bis) - ux(von), uh + 2);
+    g.fillStyle = "#f85149"; g.fillRect(ux(pos()) - 1.5, 0, 3, uh + 4);
+  }
+  // Geist im Profil
+  const gd = geistDist();
+  if (gd != null && gd >= von && gd <= bis) {
+    g.fillStyle = "#8b949e"; g.beginPath(); g.arc(x(gd), y(punkt(gd).ele), 6, 0, 2 * Math.PI); g.fill();
+    g.strokeStyle = "#fff"; g.lineWidth = 1.5; g.stroke();
+  }
+}
+
+// Tippen aufs Profil setzt die Position (zum Abgleich mit dem Edge)
+leinwand.addEventListener("click", e => {
+  if (!profilBild || !profilBild.x) return;
+  const rect = leinwand.getBoundingClientRect(), { W, von, bis } = profilBild;
+  const d = von + (e.clientX - rect.left - RAND.l) / profilBild.breite * (bis - von);
+  if (d < 0 || d > z.kurs.laenge) return;
+  if (confirm(`Position auf ${(d / 1000).toFixed(2).replace(".", ",")} km setzen?`)) { z.dist = d; neuStart(); }
+});
+
+// ------------------------------------------------------------------ Anzeige
+const zahl = (v, n = 0) => v.toLocaleString("de-DE", { minimumFractionDigits: n, maximumFractionDigits: n });
+function zeit(s) {
+  s = Math.floor(s);
+  return `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+let letzteKarte = 0, letzterZoom = 0;
+// Karte weich drehen statt springen: kürzester Weg, ease-in-out über DREH_MS, nur 20 Schritte pro Sekunde
+// und nur solange gedreht wird (Akku). Eine neue Sollrichtung startet die Drehung ab der aktuellen Lage neu.
+const DREH_MS = 900, DREH_SCHRITT_MS = 50;
+let drehTimer = null;
+function karteDrehen(soll) {
+  const start = karte.getBearing(), delta = winkelDiff(start, soll), t0 = performance.now();
+  clearInterval(drehTimer);
+  drehTimer = setInterval(() => {
+    const f = Math.min(1, (performance.now() - t0) / DREH_MS), e = f < .5 ? 2 * f * f : 1 - 2 * (1 - f) * (1 - f);
+    karte.setBearing(start + delta * e);
+    if (f >= 1) { clearInterval(drehTimer); drehTimer = null; }
+  }, DREH_SCHRITT_MS);
+}
+function zeichnen(karteSofort = false) {
+  if (!z.kurs) return;
+  const p = punkt(pos()), s = steigung(pos());
+  const frisch = Date.now() - z.datenZeit < VERALTET_MS;
+  $("wSteigung").innerHTML = `${zahl(s * 100, 1)}<small>%</small>`;
+  $("wSteigung").style.color = farbe(s);
+  $("wVoraus").textContent = rampeVoraus();
+  // Kurswahl während der Fahrt sperren (Kickr verbunden oder Testmodus, Fahrzeit läuft)
+  $("kurs").disabled = (kickrAktiv || z.sim) && z.fahrzeit > 0;
+  $("btnKatalog").disabled = $("kurs").disabled;   // Seitenwechsel trennt Bluetooth
+  // Ausfall: Kickr soll verbunden sein, liefert aber kein Tempo
+  const alter = z.datenZeit ? (Date.now() - z.datenZeit) / 1000 : null;
+  const ausfall = kickrAktiv && !z.sim && !frisch;
+  $("ausfall").classList.toggle("an", ausfall);
+  if (ausfall) $("ausfallText").textContent = (alter != null ? `letzte Daten vor ${Math.round(alter)} s · ` : "")
+    + (geraet && geraet.gatt.connected ? "Kickr verbunden, sendet nichts – kurbeln?" : "Verbindung wird wiederhergestellt …");
+  $("wWatt").innerHTML = frisch && z.watt != null ? `${zahl(z.watt)}<small>W</small>` : "–";
+  $("wTempo").innerHTML = frisch && z.tempo != null ? `${zahl(z.tempo, 1)}<small>km/h</small>` : "–";
+  $("wKadenz").innerHTML = frisch && z.kadenz != null ? `${zahl(z.kadenz)}<small>rpm</small>` : "–";
+  const hfFrisch = Date.now() - z.hfZeit < VERALTET_MS;
+  $("wHf").innerHTML = hfFrisch && z.hf ? `${zahl(z.hf)}<small>bpm</small>` : "–";
+  coachAnzeige(frisch);
+  kurbelAnzeige();
+  $("wKm").innerHTML = `${zahl(z.dist / 1000, 2)}<small>km</small>`;
+  $("wZeit").textContent = zeit(z.fahrzeit);
+  $("wRestKm").innerHTML = `${zahl(Math.max(0, z.kurs.laenge - z.dist) / 1000, 2)}<small>km</small>`;
+  $("wRestHm").innerHTML = `${zahl(Math.max(0, z.kurs.hoch - p.hoch))}<small>hm</small>`;
+  $("banner").classList.toggle("an", z.dist >= z.kurs.laenge - 1);
+  posM.setLatLng([p.lat, p.lon]);
+  const jetzt = Date.now();
+  if (folgen && (karteSofort || jetzt - letzteKarte > 1000)) {
+    letzteKarte = jetzt;
+    // Langsam (Berg) nah, schnell weiter weg; Leaflet-Zoomstufen
+    const v = z.tempo || 0, zz = v < 12 ? 18 : v < 20 ? 17 : v < 30 ? 16 : 15;
+    if (karteSofort) karte.setView([p.lat, p.lon], zz, { animate: false });
+    else if (karte.getZoom() !== zz && jetzt - letzterZoom > 8000) { letzterZoom = jetzt; karte.setView([p.lat, p.lon], zz, { animate: true }); }
+    else karte.panTo([p.lat, p.lon], { animate: true, duration: .5 });
+    // Fahrtrichtung oben: wie das Foto (sonst Straßentangente); setBearing dreht im Uhrzeigersinn
+    if (karte.setBearing) {
+      const richtung = z.svAn && sv.id ? sv.zielHeading : kurswinkel(punkt(pos() - 5), punkt(pos() + 10));
+      const soll = -richtung, ist = karte.getBearing();
+      if (Math.abs(winkelDiff(ist, soll)) > 3) karteDrehen(soll);
+    }
+  }
+  geistZeichnen(p);
+  ereignisse();
+  profilZeichnen();
+}
+
+// ------------------------------------------------------------------ Geisterfahrer
+// Letzte Fahrt auf diesem Kurs als Spur [[fahrzeit_s, dist_m], …]; Vergleich über die Fahrzeit (ab Kursstart)
+function geistDist() {
+  const g = z.geist;
+  if (!g || !z.fahrzeit || !g.punkte.length) return null;
+  const P = g.punkte, t = z.fahrzeit;
+  if (t <= P[0][0]) return P[0][1];          // Spur beginnt später (z. B. nach Positionssprung): nicht rückwärts rechnen
+  if (t >= P[P.length - 1][0]) return P[P.length - 1][1];
+  let i = 1; while (i < P.length && P[i][0] < t) i++;
+  const [t0, d0] = P[i - 1], [t1, d1] = P[i];
+  return d0 + (d1 - d0) * (t - t0) / Math.max(1, t1 - t0);
+}
+function geistZeitBei(d) {   // Fahrzeit des Geists an Distanz d (null, wenn er dort nie war)
+  const P = z.geist.punkte;
+  if (!P.length || d > P[P.length - 1][1] || d < P[0][1]) return null;
+  let i = 1; while (i < P.length && P[i][1] < d) i++;
+  if (i >= P.length) return P[P.length - 1][0];
+  const [t0, d0] = P[i - 1], [t1, d1] = P[i];
+  return t0 + (t1 - t0) * (d - d0) / Math.max(1, d1 - d0);
+}
+function geistZeichnen(p) {
+  const el = $("geist"), gd = geistDist();
+  if (gd == null) { el.className = ""; geistM.remove(); return; }
+  const q = punkt(gd); geistM.setLatLng([q.lat, q.lon]).addTo(karte);
+  const tg = geistZeitBei(z.dist), dat = z.geist.datum.slice(8, 10) + "." + z.geist.datum.slice(5, 7) + ".";
+  if (tg == null) { el.textContent = `Geist ${dat}: hier warst du nie`; el.className = "an"; return; }
+  const delta = tg - z.fahrzeit, a = Math.abs(Math.round(delta));
+  el.textContent = `Geist ${dat}: ${delta >= 0 ? "+" : "−"}${Math.floor(a / 60)}:${String(a % 60).padStart(2, "0")}`;
+  el.className = "an " + (delta >= 0 ? "vor" : "hinter");
+}
+async function geistLaden() {
+  z.geist = null;
+  // ohne = laufende Fahrt: nach einem Neuladen wäre sonst ihr eigener erster Teil der Geist
+  const ohne = fahrt ? "&ohne=" + encodeURIComponent(fahrt.id) : "";
+  try { const g = await (await fetch("api/geist?kurs=" + encodeURIComponent(z.kursName) + ohne)).json(); if (g && g.punkte) z.geist = g; }
+  catch (e) {}
+}
+
+// ------------------------------------------------------------------ Einblendungen
+// Kehren (Richtungswechsel > 140° auf 80 m), Orte aus Wikipedia neben der Strecke, Landschaftstext aus dem
+// Katalog zu Beginn, Gipfel. Immer nur eine Einblendung; Orte frühestens alle 45 s.
+const EIN_MS = 7000, ORT_ABSTAND_S = 45, ORT_VORLAUF_M = 150, ORT_QUER_M = 1200;
+const ein = { bis: 0, letzterOrt: -1e9, letztPos: null, text: false };
+function einblenden(html, ms = EIN_MS) {
+  $("einblendung").innerHTML = html; $("einblendung").classList.add("an");
+  ein.bis = Date.now() + ms;
+}
+function kursAnalysieren() {
+  const k = z.kurs, L_ = k.laenge;
+  // Gipfel: höchster Punkt nach dem Vorlauf
+  let gipfel = 0, hmax = -1e9;
+  for (let d = k.anfahrt || 0; d <= L_; d += 20) { const h = punkt(d).ele; if (h > hmax) { hmax = h; gipfel = d; } }
+  k.gipfel = gipfel;
+  const kehren = [];
+  for (let d = 40; d < L_ - 40; d += 10) {
+    const w = Math.abs(winkelDiff(kurswinkel(punkt(d - 40), punkt(d)), kurswinkel(punkt(d), punkt(d + 40))));
+    if (w > 140 && (!kehren.length || d - kehren[kehren.length - 1] > 120)) kehren.push(d);
+  }
+  k.kehren = kehren; k.orte = []; k.text = null;
+  Object.assign(ein, { letztPos: null, text: false, gipfelGezeigt: false, anstiegT0: null, anstiegW: [0, 0] });
+}
+async function orteLaden() {
+  const k = z.kurs, name = z.kursName, gefunden = new Map();
+  for (let d = (k.anfahrt || 0); d <= k.laenge; d += 1500) {
+    const p = punkt(d);
+    for (const sprache of ["de", "en"]) {
+      try {
+        const url = `https://${sprache}.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${p.lat.toFixed(5)}|${p.lon.toFixed(5)}`
+          + `&gsradius=1500&gslimit=15&format=json&origin=*`;
+        const r = await (await fetch(url)).json(), treffer = (r.query && r.query.geosearch) || [];
+        for (const o of treffer) if (!gefunden.has(o.title)) gefunden.set(o.title, o);
+        if (treffer.length) break;   // Englisch nur, wo es an diesem Suchpunkt nichts Deutsches gibt
+      } catch (e) {}
+    }
+    if (z.kursName !== name) return;   // Kurs gewechselt
+  }
+  const orte = [];
+  for (const o of gefunden.values()) {
+    // nächster Streckenpunkt (alle 25 m) und Seite
+    let best = null;
+    for (let d = (k.anfahrt || 0); d <= k.laenge; d += 25) {
+      const p = punkt(d), a = abstand(p, { lat: o.lat, lon: o.lon });
+      if (!best || a < best.a) best = { d, a };
+    }
+    if (!best || best.a > ORT_QUER_M) continue;
+    const r = kurswinkel(punkt(best.d - 10), punkt(best.d + 10)), zu = kurswinkel(punkt(best.d), { lat: o.lat, lon: o.lon });
+    const seite = best.a < 60 ? "an der Strecke" : ((zu - r + 360) % 360) < 180 ? "rechts" : "links";
+    orte.push({ d: best.d, name: o.title, seite, quer: best.a });
+  }
+  k.orte = orte.sort((a, b) => a.d - b.d);
+}
+async function textLaden() {
+  const kid = ((z.kursName || "").match(/^Katalog_(.+?)(?:_edge)?\.gpx$/) || [])[1];
+  if (!kid) return;
+  try { const s = await (await fetch("api/strecke?id=" + encodeURIComponent(kid))).json(); if (s) z.kurs.text = s; } catch (e) {}
+}
+function ereignisse() {
+  const el = $("einblendung"), d = pos(), alt = ein.letztPos, k = z.kurs;
+  if (Date.now() > ein.bis) el.classList.remove("an");
+  ein.letztPos = d;
+  if (alt == null || !z.fahrzeit) return;
+  const vorbei = x => alt < x && x <= d;
+  // Gipfel: Anstiegszeit (ab Ende des Vorlaufs) und Vergleich mit der letzten Fahrt
+  if (vorbei(k.anfahrt || 0) || (ein.anstiegT0 == null && d > (k.anfahrt || 0) && d < k.gipfel)) ein.anstiegT0 ??= z.fahrzeit;
+  if (!ein.gipfelGezeigt && vorbei(k.gipfel) && ein.anstiegT0 != null) {
+    ein.gipfelGezeigt = true;
+    const t = Math.round(z.fahrzeit - ein.anstiegT0), w = fahrt && fahrt.anstiegW[1] ? Math.round(fahrt.anstiegW[0] / fahrt.anstiegW[1]) : null;
+    if (fahrt) { fahrt.anstieg = t; fahrt.anstiegW_ = w; }
+    const fr = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    const vor = nutzer.historie.filter(f => f.kurs === z.kursName && f.anstieg && (!fahrt || f.id !== fahrt.id));
+    const best = vor.length ? vor.reduce((a, b) => b.anstieg < a.anstieg ? b : a) : null;
+    const vergleich = best ? (t <= best.anstieg ? `${fr(best.anstieg - t)} schneller als dein Bestwert vom ${best.datum.slice(8, 10)}.${best.datum.slice(5, 7)}.`
+                                                : `${fr(t - best.anstieg)} hinter deinem Bestwert vom ${best.datum.slice(8, 10)}.${best.datum.slice(5, 7)}.`) : "erste Fahrt hier";
+    $("gipfel").innerHTML = `<b>Gipfel</b><span>${fr(t)}${w ? ` · Ø ${w} W` : ""}</span><small>${vergleich}</small>`;
+    $("gipfel").classList.add("an"); setTimeout(() => $("gipfel").classList.remove("an"), 15000);
+    if (fahrt) fahrtSenden();
+    return;
+  }
+  // Landschaft einmal zu Beginn
+  if (!ein.text && k.text && k.text.text && (k.text.text.szenerie || k.text.text.bekannt)) {
+    ein.text = true;
+    const s = k.text.text.szenerie || "", b = k.text.text.bekannt;
+    einblenden(`${esc(s.length > 170 ? s.slice(0, 167) + " …" : s)}${b ? `<small>bekannt aus: ${esc(b)}</small>` : ""}`, 15000);
+    return;
+  }
+  const i = k.kehren.findIndex(vorbei);
+  if (i >= 0) { einblenden(`Kehre ${i + 1} von ${k.kehren.length}`, 5000); return; }
+  if (Date.now() < ein.bis || (z.fahrzeit - ein.letzterOrt) < ORT_ABSTAND_S) return;
+  const o = k.orte.find(o => !o.gezeigt && d >= o.d - ORT_VORLAUF_M && d < o.d + 50);
+  if (o) {
+    o.gezeigt = true; ein.letzterOrt = z.fahrzeit;
+    einblenden(`📍 ${esc(o.name)}<small>${o.seite}${o.seite === "an der Strecke" ? "" : `, ${Math.round(o.quer / 50) * 50} m`}</small>`);
+  }
+}
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ------------------------------------------------------------------ Takt
+let letzterTakt = performance.now(), letztesSpeichern = 0, letztesProtokoll = 0, letztesZeichnen = 0, letztesKurbelProtokoll = 0;
+// Positionszeile im Protokoll alle 2 s (vorher 10 s): genau genug für den Abgleich mit der Edge-FIT (1 s)
+const PROTOKOLL_MS = 2000;
+function takt() {
+  const jetzt = performance.now(), dt = Math.min(2, (jetzt - letzterTakt) / 1000);
+  letzterTakt = jetzt;
+  const raffer = z.sim ? z.simRaffer : 1;
+  if (z.sim && z.kurs) {
+    z.tempo = simTempo(z.simWatt, steigung(z.dist)) * 3.6;
+    z.watt = z.simWatt; z.datenZeit = Date.now();
+    simKoerper(dt * raffer);
+  }
+  const frisch = Date.now() - z.datenZeit < VERALTET_MS;
+  if (z.scharf && frisch && z.tempo > 2) scharfAusloesen();
+  if (z.kurs && !z.scharf && frisch && z.tempo > 0.5 && z.dist < z.kurs.laenge) {
+    // Sendet der Kickr seine Gesamtdistanz, kommt der Weg von dort (indoorBikeData), sonst integrieren
+    // (bleibt das Distanzfeld länger als 5 s aus, wieder integrieren, sonst stünde die Position)
+    if (z.sim || !z.kickrDistDa || Date.now() - z.kickrDistZeit > 5000)
+      z.dist = Math.min(z.kurs.laenge, z.dist + z.tempo / 3.6 * dt * raffer);
+    z.fahrzeit += dt * raffer;
+    coachTakt(dt * raffer);
+    fahrtTakt(dt);
+  }
+  if (fahrt && Date.now() - fahrt.gesendet > FAHRT_SENDEN_MS) fahrtSenden();
+  kickrWache();
+  if (Date.now() - letztesProtokoll > PROTOKOLL_MS && z.kurs && !z.scharf && frisch) {
+    letztesProtokoll = Date.now();
+    protokoll(`pos dist=${z.dist.toFixed(0)} zeit=${z.fahrzeit.toFixed(0)} v=${(z.tempo || 0).toFixed(1)}`
+        + ` w=${z.watt ?? ""} quelle=${z.kickrDistDa ? "kickr" : "integriert"}`
+        + ` hf=${Date.now() - z.hfZeit < VERALTET_MS ? z.hf : ""} kad=${z.kadenz == null ? "" : Math.round(z.kadenz)}`
+        + ` s=${(steigung(z.dist) * 100).toFixed(1)} sv=${sv.zahl} svg=${sv.gegen}` + coachProtokoll());
+  }
+  if (kurbelGeraet && kurbelGeraet.gatt.connected && Date.now() - letztesKurbelProtokoll >= 1000) {
+    letztesKurbelProtokoll = Date.now(); kurbelProtokoll();
+  }
+  if (Date.now() - letztesZeichnen >= ANZEIGE_MS) { letztesZeichnen = Date.now(); zeichnen(); }
+  streetView();
+  if (Date.now() - letztesSpeichern > 2000) { letztesSpeichern = Date.now(); speichern(); }
+}
+
+// Testmodus: Tempo aus Leistung, Steigung und Systemmasse (stationäre Fahrt)
+function simTempo(P, s) {
+  const m = z.masse, g = 9.81, crr = 0.005, cdA = 0.35, rho = 1.2, eta = 0.97;
+  const th = Math.atan(s), F = m * g * (Math.sin(th) + crr * Math.cos(th));
+  let lo = 0, hi = 30;
+  for (let i = 0; i < 50; i++) {
+    const v = (lo + hi) / 2;
+    if (v * (F + 0.5 * rho * cdA * v * v) > P * eta) hi = v; else lo = v;
+  }
+  return lo;
+}
+
+// ------------------------------------------------------------------ Speichern
+function speichern() {
+  // fahrt mit: nach einem Neuladen (Bluefy-Absturz, Akku) geht dieselbe Fahrt weiter statt einer zweiten
+  try { localStorage.setItem("kickrAnzeige", JSON.stringify({ kurs: z.kursName, dist: z.dist, fahrzeit: z.fahrzeit, fahrt })); }
+  catch (e) { /* privater Modus */ }
+}
+function gespeichert() {
+  try { return JSON.parse(localStorage.getItem("kickrAnzeige") || "{}"); } catch (e) { return {}; }
+}
+
+// ------------------------------------------------------------------ Historie und Favoriten
+// Eine Fahrt beginnt mit dem ersten Meter auf einem Kurs und endet mit Kurswechsel, Zurücksetzen oder
+// Schließen der Seite. Der Server bekommt minütlich den Zwischenstand (gleiche id ersetzt), damit ein
+// leerer iPad-Akku die Fahrt nicht verliert. Testmodus zählt nicht.
+const FAHRT_MIN_S = 300;        // kürzere Fahrten nicht eintragen (Ausprobieren, Fehlstart)
+const FAHRT_SENDEN_MS = 60000;
+let fahrt = null, nutzer = { favoriten: [], historie: [] };
+// Schlüssel einer Strecke: Katalog-id (wie im Katalog), sonst der Dateiname
+const schluessel = datei => ((datei || "").match(/^Katalog_(.+?)(?:_edge)?\.gpx$/) || [])[1] || datei;
+
+function fahrtTakt(dt) {
+  if (z.sim) return;
+  if (!fahrt) fahrt = { id: new Date().toISOString(), kurs: z.kursName, name: z.kurs.name || z.kursName,
+                        datum: lokalZeit(), zeit: 0, weg: 0, letzt: z.dist, gesendet: Date.now(),
+                        w: [0, 0], hf: [0, 0], kad: [0, 0], spur: [], anstiegW: [0, 0], anstieg: null, anstiegW_: null };
+  const d = z.dist - fahrt.letzt;
+  if (d > 0 && d < 50) fahrt.weg += d;     // +100-m-Knopf und Positionssprünge nicht mitzählen
+  fahrt.letzt = z.dist; fahrt.zeit += dt;
+  // Leistung mit Nullen (Rollen zählt, wie bei Garmin), HF und Kadenz ohne
+  const summe = (s, x, mitNull = false) => { if (x != null && (mitNull ? x >= 0 : x > 0)) { s[0] += x * dt; s[1] += dt; } };
+  summe(fahrt.w, z.watt, true);
+  summe(fahrt.hf, Date.now() - z.hfZeit < VERALTET_MS ? z.hf : null);
+  summe(fahrt.kad, z.kadenz);
+  if (z.dist >= (z.kurs.anfahrt || 0) && z.dist < (z.kurs.gipfel || z.kurs.laenge)) summe(fahrt.anstiegW, z.watt, true);
+  const sp = fahrt.spur;   // Spur für den Geisterfahrer alle 10 s Fahrzeit
+  if (!sp.length || z.fahrzeit - sp[sp.length - 1][0] >= 10) sp.push([Math.round(z.fahrzeit), Math.round(z.dist)]);
+}
+function lokalZeit() {   // "2026-10-22T17:05:00" in Ortszeit, sortiert wie ISO
+  const t = new Date(), p = n => String(n).padStart(2, "0");
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}T${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`;
+}
+function fahrtSenden(schliessen = false) {
+  if (!fahrt) return;
+  fahrt.gesendet = Date.now();
+  if (fahrt.zeit < FAHRT_MIN_S) return;
+  const m = s => s[1] ? Math.round(s[0] / s[1]) : null;
+  const eintrag = { id: fahrt.id, kurs: fahrt.kurs, name: fahrt.name, datum: fahrt.datum,
+    fahrzeit: Math.round(fahrt.zeit), km: +(fahrt.weg / 1000).toFixed(2),
+    anteil: +(z.kurs ? Math.min(1, z.dist / z.kurs.laenge) : 0).toFixed(3),
+    w: m(fahrt.w), hf: m(fahrt.hf), kad: m(fahrt.kad), ziel: !!z.kurs && z.dist >= z.kurs.laenge - 1,
+    anstieg: fahrt.anstieg, anstieg_w: fahrt.anstiegW_ };
+  if (fahrt.tf) Object.assign(eintrag, { tf_hf: fahrt.tf.hf, tf_w: fahrt.tf.w, tf_n: fahrt.tf.n });
+  const text = JSON.stringify(eintrag);
+  if (schliessen && navigator.sendBeacon) navigator.sendBeacon("api/historie", text);
+  else fetch("api/historie", { method: "POST", body: text, keepalive: true }).catch(() => {});
+  nutzer.historie = nutzer.historie.filter(f => f.id !== eintrag.id).concat(eintrag);
+  const spur = JSON.stringify({ id: fahrt.id, kurs: fahrt.kurs, punkte: fahrt.spur });
+  if (schliessen && navigator.sendBeacon) navigator.sendBeacon("api/spur", spur);
+  else fetch("api/spur", { method: "POST", body: spur, keepalive: spur.length < 60000 }).catch(() => {});
+}
+function fahrtEnde() { fahrtSenden(); fahrt = null; }
+addEventListener("pagehide", () => fahrtSenden(true));
+
+async function nutzerLaden() {
+  try { nutzer = await (await fetch("api/nutzer")).json(); } catch (e) { /* alter Server: ohne */ }
+}
+function favKnopf() {
+  const an = nutzer.favoriten.includes(schluessel(z.kursName));
+  $("btnFav").textContent = an ? "★" : "☆";
+  $("btnFav").classList.toggle("an", an);
+}
+$("btnFav").onclick = async () => {
+  if (!z.kursName) return;
+  const k = schluessel(z.kursName), an = !nutzer.favoriten.includes(k);
+  try {
+    const r = await fetch(`api/favorit?id=${encodeURIComponent(k)}&an=${an ? 1 : 0}`, { method: "POST" });
+    if (r.ok) nutzer.favoriten = await r.json();
+  } catch (e) { return; }
+  favKnopf(); kurseListe();
+};
+
+// ------------------------------------------------------------------ Strecken
+let kurseAlle = [];
+// Favoriten oben (★), dahinter alphabetisch; gefahrene Strecken mit Anzahl
+function kurseListe() {
+  const fav = new Set(nutzer.favoriten), gefahren = {};
+  for (const f of nutzer.historie) gefahren[schluessel(f.kurs)] = (gefahren[schluessel(f.kurs)] || 0) + 1;
+  const sortiert = [...kurseAlle].sort((a, b) =>
+    fav.has(schluessel(b.datei)) - fav.has(schluessel(a.datei)) || a.name.localeCompare(b.name, "de"));
+  const sel = $("kurs"), wert = sel.value;
+  sel.replaceChildren(...sortiert.map(k => {
+    const s = schluessel(k.datei), n = gefahren[s];
+    return new Option((fav.has(s) ? "★ " : "") + k.name + (n ? ` (${n}×)` : ""), k.datei);
+  }));
+  if (wert) sel.value = wert;
+}
+async function kurseLaden() {
+  // Server liefert {datei, name}; angezeigt wird der GPX-Name wie auf dem Edge
+  const kurse = (await (await fetch("api/kurse")).json()).map(k => typeof k === "string" ? { datei: k, name: k } : k);
+  const namen = kurse.map(k => k.datei);
+  const sel = $("kurs"), alt = gespeichert();
+  await nutzerLaden();
+  kurseAlle = kurse; kurseListe();
+  if (!namen.length) { status("keine GPX im Ordner kurse"); return; }
+  sel.value = namen.includes(alt.kurs) ? alt.kurs : namen[0];
+  await kursWaehlen(sel.value, alt.kurs === sel.value ? alt : null);
+}
+async function kursWaehlen(name, fortsetzen) {
+  fahrtEnde();
+  if (fortsetzen && fortsetzen.fahrt && fortsetzen.fahrt.kurs === name)
+    fahrt = { ...fortsetzen.fahrt, letzt: fortsetzen.dist || 0, gesendet: Date.now() };
+  const text = await (await fetch("kurse/" + encodeURIComponent(name))).text();
+  z.kurs = gpxLesen(text); z.kursName = name; favKnopf();
+  z.dist = fortsetzen ? Math.min(fortsetzen.dist || 0, z.kurs.laenge) : 0;
+  z.fahrzeit = fortsetzen ? fortsetzen.fahrzeit || 0 : 0;
+  coachReset();
+  kursAnalysieren(); geistM.remove();
+  karteKurs(); profilVorbereiten(); neuStart();
+  geistLaden(); textLaden(); orteLaden();
+  document.title = "Kickr · " + (z.kurs.name || name);
+}
+function neuStart() {
+  svReset();
+  zeichnen(true); speichern();
+}
+$("kurs").addEventListener("change", e => kursWaehlen(e.target.value, null));
+$("btnVor").onclick = () => { z.dist = Math.min(z.kurs.laenge, z.dist + 100); neuStart(); };
+$("btnZurueck").onclick = () => { z.dist = Math.max(0, z.dist - 100); neuStart(); };
+// Zurück an den Start nur per Gedrückthalten – ein Fehltipp löscht sonst die Position
+(() => {
+  const knopf = $("btnNeu"), balken = knopf.querySelector(".balken"), DAUER = 1200;
+  let t0 = 0, timer = null;
+  const stopp = () => { clearInterval(timer); timer = null; balken.style.width = "0"; };
+  knopf.addEventListener("pointerdown", e => {
+    e.preventDefault(); t0 = performance.now(); stopp();
+    timer = setInterval(() => {
+      const anteil = (performance.now() - t0) / DAUER;
+      balken.style.width = Math.min(100, anteil * 100) + "%";
+      if (anteil >= 1) { stopp(); fahrtEnde(); z.dist = 0; z.fahrzeit = 0; coachReset(); neuStart(); }
+    }, 30);
+  });
+  ["pointerup", "pointerleave", "pointercancel"].forEach(ev => knopf.addEventListener(ev, stopp));
+})();
+
+// Steilstes 100-m-Stück in den nächsten 500 m, z. B. "max 8,4 % in 230 m"
+function rampeSuchen(weite = 500) {   // {grad, weg} des steilsten 100-m-Stücks, das in weite m beginnt, oder null
+  const L_ = z.kurs.laenge, bis = Math.min(L_ - 100, pos() + weite);
+  let best = -Infinity, wo = null;
+  for (let d = pos(); d <= bis; d += 25) {
+    const g = (punkt(d + 100).ele - punkt(d).ele) / 100;
+    if (g > best) { best = g; wo = d; }
+  }
+  return wo == null ? null : { grad: best, weg: wo - pos() };
+}
+function rampeVoraus() {
+  if (!z.kurs) return "";
+  const r = rampeSuchen();
+  if (!r) return "";
+  const best = r.grad, jetzt = steigung(pos()), weg = Math.round(r.weg / 10) * 10;
+  if (best < 0.02 && jetzt < 0.02) return "nächste 500 m flach";
+  if (weg < 30 || best - jetzt < 0.01) return `nächste 500 m max ${zahl(best * 100, 1)} %`;
+  return `max ${zahl(best * 100, 1)} % in ${weg} m`;
+}
+
+function scharfAusloesen() {
+  fahrtEnde();
+  z.scharf = false; z.dist = 0; z.fahrzeit = 0; coachReset();
+  $("btnScharf").classList.remove("scharf"); $("hinweis").textContent = "";
+  neuStart();
+}
+$("btnScharf").onclick = () => {
+  z.scharf = !z.scharf;
+  $("btnScharf").classList.toggle("scharf", z.scharf);
+  if (z.scharf) { fahrtEnde(); z.dist = 0; z.fahrzeit = 0; neuStart(); $("hinweis").textContent = "Scharf – zählt ab dem ersten Tritt"; }
+  else $("hinweis").textContent = "";
+};
+$("btnEdge").onclick = () => {
+  if (!z.kurs) return;
+  $("edgeIst").textContent = zahl(z.dist / 1000, 2) + " km";
+  $("edgeKm").value = "";
+  $("edgeDlg").classList.add("an");
+  $("edgeKm").focus();
+};
+$("edgeAbbr").onclick = () => $("edgeDlg").classList.remove("an");
+
+// Form: Kontroll-HF je Fahrt (Historie-Felder tf_hf/tf_w/tf_n aus dem Tagesform-Check), Verlauf mit
+// gleitendem Mittel über FORM_MITTEL Fahrten; gestrichelt die Referenz aus COACHING (ref_hf)
+const FORM_MITTEL = 5;
+$("btnForm").onclick = async () => {
+  await nutzerLaden();
+  formZeigen();
+  $("formDlg").classList.add("an");
+};
+$("formZu").onclick = () => $("formDlg").classList.remove("an");
+function formZeigen() {
+  const f = nutzer.historie.filter(x => x.tf_hf != null).sort((a, b) => (a.datum < b.datum ? -1 : 1));
+  const ref = co.cfg && co.cfg.ref_hf, svg = $("formKurve");
+  const tag = d => `${d.slice(8, 10)}.${d.slice(5, 7)}.`;
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  if (!f.length) {
+    $("formTitel").textContent = "Noch keine Kontroll-HF gespeichert. Der Tagesform-Check läuft mit Coach an, "
+      + `Minute ${COACH.tf_ab / 60}–${COACH.tf_bis / 60} im Flachen bei ~${co.cfg ? co.cfg.ref_watt : "?"} W.`;
+    svg.innerHTML = ""; $("formListe").innerHTML = "";
+    return;
+  }
+  const mittelN = f.map((_, i) => {
+    const s = f.slice(Math.max(0, i - FORM_MITTEL + 1), i + 1);
+    return s.reduce((a, x) => a + x.tf_hf, 0) / s.length;
+  });
+  const letzte = f[f.length - 1];
+  $("formTitel").innerHTML = `Kontroll-HF zuletzt <b>${zahl(letzte.tf_hf, 1)} bpm</b> bei ${letzte.tf_w} W`
+    + ` · Ø letzte ${Math.min(FORM_MITTEL, f.length)} Fahrten <b>${zahl(mittelN[f.length - 1], 1)}</b>`
+    + (ref ? ` · Referenz ${ref}` : "") + ` · ${f.length} Fahrten`;
+
+  // Kurve: x nach Datum, y in bpm (niedriger = besser)
+  const W = 640, H = 240, L = 40, R = 12, O = 12, U = 24;
+  const t = f.map(x => Date.parse(x.datum)), t0 = t[0], t1 = t[t.length - 1];
+  const werte = f.map(x => x.tf_hf).concat(ref ? [ref] : []);
+  const yMin = Math.floor((Math.min(...werte) - 3) / 5) * 5, yMax = Math.ceil((Math.max(...werte) + 3) / 5) * 5;
+  const X = v => (t1 > t0 ? L + (v - t0) / (t1 - t0) * (W - L - R) : (L + W - R) / 2);
+  const Y = v => O + (yMax - v) / (yMax - yMin) * (H - O - U);
+  let s = "";
+  for (let v = yMin; v <= yMax; v += 5)
+    s += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" style="stroke:var(--rand)"/>`
+      + `<text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${v}</text>`;
+  if (ref) s += `<line x1="${L}" x2="${W - R}" y1="${Y(ref)}" y2="${Y(ref)}" style="stroke:var(--gedimmt)" stroke-dasharray="6 5"/>`;
+  s += `<text x="${W - R}" y="${O + 12}" text-anchor="end">niedriger = besser</text>`;
+  const linie = ys => ys.map((y, i) => `${X(t[i]).toFixed(1)},${Y(y).toFixed(1)}`).join(" ");
+  s += `<polyline points="${linie(f.map(x => x.tf_hf))}" fill="none" style="stroke:var(--gedimmt)" stroke-width="1.5"/>`;
+  if (f.length > 1) s += `<polyline points="${linie(mittelN)}" fill="none" style="stroke:var(--akzent)" stroke-width="3"/>`;
+  s += f.map((x, i) => `<circle cx="${X(t[i])}" cy="${Y(x.tf_hf)}" r="4" style="fill:var(--text)"/>`).join("");
+  s += `<text x="${L}" y="${H - 6}">${tag(f[0].datum)}</text>`;
+  if (f.length > 1) s += `<text x="${W - R}" y="${H - 6}" text-anchor="end">${tag(letzte.datum)}</text>`;
+  svg.innerHTML = s;
+
+  $("formListe").innerHTML = f.slice().reverse().map(x =>
+    `<tr><td>${tag(x.datum)}${x.datum.slice(2, 4)}</td><td>${esc(x.name || x.kurs)}</td>`
+    + `<td class="z">${zahl(x.tf_hf, 1)} bpm</td><td class="z">${x.tf_w} W</td>`
+    + `<td class="z">${ref ? (x.tf_hf >= ref ? "+" : "−") + zahl(Math.abs(x.tf_hf - ref), 1) : ""}</td>`
+    + `<td class="z">${x.tf_n} s</td></tr>`).join("");
+}
+$("edgeOk").onclick = () => {
+  const km = parseFloat($("edgeKm").value.replace(",", "."));
+  if (isFinite(km) && km >= 0) {
+    protokoll(`edge-km edge=${km} iride=${(z.dist / 1000).toFixed(3)}`);
+    z.dist = Math.min(z.kurs.laenge, km * 1000);
+    if (z.scharf) { z.scharf = false; $("btnScharf").classList.remove("scharf"); $("hinweis").textContent = ""; }
+    neuStart();
+  }
+  $("edgeDlg").classList.remove("an");
+};
+$("edgeKm").addEventListener("keydown", e => { if (e.key === "Enter") $("edgeOk").click(); });
+
+// Street-View-Blick: 0 vorn, 1 weit (~130° Sichtfeld); beides aus demselben Panorama
+const BLICK_NAMEN = ["vorn", "weit"];
+let blick = 0;
+try { blick = Math.min(1, +localStorage.getItem("iride.blick") || 0); } catch (e) {}
+$("btnBlick").textContent = "Blick " + BLICK_NAMEN[blick];
+// Knopfleiste: beim Rollen weg, damit Bild und Werte die volle Höhe haben; im Stand (Ampel, Pause,
+// vor dem Start) wieder da. Griff oben oder eine Bedienung der Leiste hält sie LEISTE_HALTEN_MS offen.
+const LEISTE_ROLLT_MS = 3000, LEISTE_STEHT_MS = 4000, LEISTE_HALTEN_MS = 10000;
+const leiste = { rolltSeit: 0, stehtSeit: 0, gehalten: 0 };
+function leisteZeigen(zu) {
+  if (document.body.classList.contains("leisteZu") === zu) return;
+  document.body.classList.toggle("leisteZu", zu);
+  setTimeout(() => window.dispatchEvent(new Event("resize")), 50);
+}
+function leisteSteuern() {
+  const jetzt = Date.now();
+  const rollt = Date.now() - z.datenZeit < VERALTET_MS && (z.tempo || 0) > 2;
+  if (rollt) { leiste.stehtSeit = 0; leiste.rolltSeit ||= jetzt; }
+  else { leiste.rolltSeit = 0; leiste.stehtSeit ||= jetzt; }
+  // offener Dialog oder Auswahlliste: nicht unter den Fingern wegklappen
+  const bedient = document.activeElement && document.activeElement.closest && document.activeElement.closest("#leiste select");
+  if (rollt && jetzt - leiste.rolltSeit >= LEISTE_ROLLT_MS && jetzt - leiste.gehalten >= LEISTE_HALTEN_MS && !bedient) leisteZeigen(true);
+  else if (!rollt && jetzt - leiste.stehtSeit >= LEISTE_STEHT_MS) leisteZeigen(false);
+}
+$("leisteGriff").onclick = () => { leiste.gehalten = Date.now(); leisteZeigen(false); };
+$("leiste").addEventListener("pointerdown", () => { leiste.gehalten = Date.now(); });
+$("leiste").addEventListener("change", () => { leiste.gehalten = Date.now(); });
+
+// Overlay: Werte über dem Bild statt in eigener Spalte; standardmäßig an, Wahl bleibt gespeichert
+let overlay = true;
+try { overlay = localStorage.getItem("iride.overlay") !== "0"; } catch (e) {}
+function overlaySetzen() {
+  document.body.classList.toggle("overlay", overlay);
+  $("btnOverlay").classList.toggle("an", overlay);
+  setTimeout(() => window.dispatchEvent(new Event("resize")), 50);
+}
+overlaySetzen();
+$("btnOverlay").onclick = () => {
+  overlay = !overlay;
+  try { localStorage.setItem("iride.overlay", overlay ? "1" : "0"); } catch (e) {}
+  overlaySetzen();
+};
+$("btnBlick").onclick = () => {
+  blick = (blick + 1) % BLICK_NAMEN.length;
+  try { localStorage.setItem("iride.blick", blick); } catch (e) {}
+  $("btnBlick").textContent = "Blick " + BLICK_NAMEN[blick];
+};
+
+$("btnProfil").onclick = () => {
+  profilStufe = (profilStufe + 1) % PROFIL_STUFEN.length;
+  try { localStorage.setItem("iride.profilStufe", profilStufe); } catch (e) {}
+  profilVorbereiten(); profilZeichnen();
+};
+
+// ------------------------------------------------------------------ Testmodus
+$("btnKatalog").onclick = () => { location.href = "katalog/"; };
+$("btnAnleitung").onclick = () => { location.href = "anleitung/"; };
+$("btnSim").onclick = () => {
+  z.sim = !z.sim;
+  $("btnSim").classList.toggle("an", z.sim);
+  $("simRegler").classList.toggle("an", z.sim);
+  // Testmodus: Anfahrt überspringen, direkt an den Beginn des echten Anstiegs
+  if (z.sim && z.kurs && z.dist < z.kurs.anfahrt) {
+    z.dist = z.kurs.anfahrt;
+    if (z.scharf) { z.scharf = false; $("btnScharf").classList.remove("scharf"); $("hinweis").textContent = ""; }
+    neuStart();
+  }
+  if (!z.sim) {
+    z.tempo = z.watt = z.kadenz = null; z.datenZeit = 0;
+    if (z.hfQuelle === "sim") { z.hf = null; z.hfZeit = 0; z.hfQuelle = ""; }
+  }
+  status(z.sim ? "Testmodus (simuliert)" : (geraet && geraet.gatt.connected ? "Kickr verbunden" : "nicht verbunden"));
+  wachHalten();
+};
+$("simWatt").oninput = e => { z.simWatt = +e.target.value; $("simWattZahl").textContent = z.simWatt + " W"; };
+$("simRaffer").onchange = e => { z.simRaffer = +e.target.value; };
+$("simHf").onchange = e => { z.simHfPlus = +e.target.value; };
+
+// Testmodus: HF und Kadenz grob nachbilden, damit der Coach etwas zu tun hat.
+// HF folgt linear der Leistung mit 45 s Zeitkonstante und leichter Drift; Kadenz aus Tempo und Gang
+// (36 × 11–32), geschaltet wird mit Verzug.
+const SIM_KETTENBLATT = 36, SIM_RITZEL = [11, 12, 13, 14, 15, 17, 19, 21, 24, 28, 32];
+const sim = { hf: 70, gang: 6, schalt: 0, uhr: 0 };
+function simKoerper(dt) {
+  sim.uhr += dt;
+  const v = (z.tempo || 0) / 3.6;
+  const kad = () => v * 60 / (RADUMFANG * SIM_KETTENBLATT / SIM_RITZEL[sim.gang]);
+  if (sim.uhr - sim.schalt > 8) {
+    if (kad() < 75 && sim.gang < SIM_RITZEL.length - 1) { sim.gang++; sim.schalt = sim.uhr; }
+    else if (kad() > 95 && sim.gang > 0) { sim.gang--; sim.schalt = sim.uhr; }
+  }
+  z.kadenz = v > 0.3 ? kad() : 0;
+  if (z.hfQuelle !== "gurt") {
+    const ziel = 60 + 0.5 * z.watt + z.simHfPlus + 6 * z.fahrzeit / 3600;
+    sim.hf += (ziel - sim.hf) * (1 - Math.exp(-dt / 45));
+    z.hf = Math.round(sim.hf); z.hfZeit = Date.now(); z.hfQuelle = "sim";
+  }
+}
+
+// ------------------------------------------------------------------ Coaching
+// Hilft, Leistung und HF selbst zu regeln: geführt wird nach Leistung, die HF ist Leitplanke.
+// Ziele aus lokal.py (COACHING) über /api/config; dort lässt sich jeder Parameter hier überschreiben.
+// Uhr ist die Fahrzeit (im Testmodus mit Zeitraffer), Proben im Sekundentakt.
+const COACH = {
+  abstand: 25,          // s Mindestabstand zwischen zwei Ansagen
+  wiederholen: 45,      // s, bis dieselbe Dauer-Ansage (HF, Leistung, Kadenz) wiederkommt
+  anlauf: 60,           // s nach dem Losfahren ohne Band-Ansagen (Überziehen zählt trotzdem)
+  hf_fenster: 90,       // s für den HF-Trend (lineare Regression)
+  hf_vorschau: 2,       // min: Warnung, wenn HF + Trend × 2 min über die Decke läuft …
+  hf_trend_nah: 12,     // … und die HF höchstens so weit unter der Decke ist (Anstieg aus der Ruhe ist normal)
+  hf_hysterese: 3,      // bpm unter der Decke, bis die HF-Warnung endet
+  band_hysterese: 3,    // W über/unter dem Band (Ø 30 s), bis es als verlassen gilt
+  ueberzieh: 20,        // W über dem Band (Ø 3 s) …
+  ueberzieh_dauer: 10,  // … so viele s: sofort „ruhiger“ (Überziehen am Rampeneinstieg)
+  kad_dauer: 10,        // s Kadenz unter der Grenze …
+  kad_steigung: 0.03,   // … bei mindestens dieser Steigung
+  kad_nachlass: 180,    // s Wiederholabstand ab der dritten Kadenz-Ansage in Folge (kein Gang mehr?)
+  rampe_ab: 0.04,       // Rampe: steilstes 100-m-Stück voraus mindestens so steil,
+  rampe_delta: 0.02,    // mindestens 2 Punkte steiler als jetzt
+  rampe_weg: 150,       // und beginnt in höchstens so vielen m
+  nachlass_delta: 0.025, // Steigung 2,5 Punkte flacher als 100 m zuvor
+  gut_nach: 120, gut_wieder: 300,   // s im Band bis „gut so“, danach alle 5 min
+  tf_ab: 240, tf_bis: 600,  // s Fahrzeit: Fenster des Tagesform-Checks
+  tf_fenster: 20,       // W um die Referenzleistung (Ø 30 s), Steigung unter 2 %
+  tf_proben: 60,        // gültige Sekunden mindestens
+  tf_toleranz: 8,       // bpm über der Referenz: Ziele für heute senken
+  tf_senkung: 10,       // W, um die das Band dann sinkt
+  hf_pro_watt: 0.3,     // bpm je W, um auf die Referenzleistung umzurechnen (vorläufig)
+};
+const co = { cfg: null, an: false, ton: false, modus: "grundlage", bergW: 160 };
+
+// ------------------------------------------------------------------ Berg-Modus
+// Ziel je 100 m aus dem Profil: Grundleistung × (1 + k × (Steigung − Ø Steigung)), höchstens ±spanne, nie unter der
+// Leistung für kad_min im leichtesten Gang (COACHING.gang). Vorlauf = Einfahren, nach dem Gipfel = Ausfahren,
+// letzter km davor = Schluss: alles, was das W′-Budget noch hergibt. W′-Bilanz nach Skiba (Verbrauch über CP,
+// Erholung darunter anteilig zum Fehlenden), CP = COACHING.ftp, W′ = COACHING.w_prime (J). Der Plan wird vorab
+// durchgerechnet; reicht das Budget nicht bis zum Schluss, sinkt die Grundleistung in 5-W-Schritten.
+const BERG = {
+  k: 0.03,             // je Prozentpunkt über/unter Ø 3 % mehr/weniger Leistung
+  spanne: 0.15,        // höchstens ±15 % um die Grundleistung
+  einfahren: 0.75, ausfahren: 0.6,   // Anteil der Grundleistung
+  schluss_m: 1000,     // letzter Abschnitt vor dem Gipfel: alles raus
+  reserve: 0.25,       // W′-Rest, unter dem das Ziel bis zur Erholung knapp unter CP bleibt
+  plan_reserve: 0.3,   // so viel W′ soll der Plan beim Schluss noch übrig haben
+  band: 15,            // ± W um das Ziel (Mittel der letzten 30 s, das Ziel springt alle 100 m)
+  knapp: 0.5,          // „ruhiger“ nur, wenn W′ darunter liegt: wer Reserve hat, darf mehr fahren (22.10.)
+  kad_min: 60,         // rpm im leichtesten Gang als Untergrenze
+  max_faktor: 1.6,     // Schluss höchstens 1,6 × CP
+  vorschau_m: 1500, vorschau_min: 250,   // steiles Stück voraus: so weit schauen, frühestens ab so viel m ansagen
+  vorschau_delta: 15, vorschau_laenge: 300,   // mindestens 15 W mehr, mindestens 300 m lang
+};
+const W_LISTE = Array.from({ length: 21 }, (_, i) => 120 + 5 * i);   // Auswahl Grundleistung 120–220 W
+
+function leistungBei(v, s) {   // W für Tempo v (m/s) bei Steigung s, gleiches Modell wie simTempo
+  const m = z.masse, th = Math.atan(s), F = m * 9.81 * (Math.sin(th) + 0.005 * Math.cos(th));
+  return v * (F + 0.5 * 1.2 * 0.35 * v * v) / 0.97;
+}
+function gangW(s) {
+  const g = co.cfg && co.cfg.gang;
+  return g && g[0] > 0 && g[1] > 0 ? leistungBei(BERG.kad_min / 60 * RADUMFANG * g[0] / g[1], s) : 0;
+}
+function wbalSchritt(wbal, p, dt) {
+  const cp = co.cfg.ftp, w0 = co.cfg.w_prime;
+  return p > cp ? wbal - (p - cp) * dt : wbal + (cp - p) * (w0 - wbal) / w0 * dt;
+}
+
+function bergPlan() {
+  co.plan = null;
+  if (co.modus !== "berg" || !z.kurs || !(co.cfg && co.cfg.ftp > 0 && co.cfg.w_prime > 0)) return;
+  const L = z.kurs.laenge, n = Math.ceil(L / 100), ele = d => punkt(d).ele, g = [];
+  for (let i = 0; i < n; i++) { const a = i * 100, b = Math.min(L, a + 100); g.push(b > a ? (ele(b) - ele(a)) / (b - a) : 0); }
+  const gs = g.map((_, i) => (g[Math.max(0, i - 1)] + g[i] + g[Math.min(n - 1, i + 1)]) / 3);   // über 300 m
+  let gipfel = 0, hmax = -1e9;
+  for (let d = 0; d <= L; d += 50) { const h = ele(d); if (h > hmax) { hmax = h; gipfel = d; } }
+  const anf = z.kurs.anfahrt || 0;
+  const art = gs.map((_, i) => i * 100 < anf ? "ein" : i * 100 >= gipfel ? "aus"
+    : i * 100 >= gipfel - BERG.schluss_m ? "schluss" : "berg");
+  const berg = gs.filter((_, i) => art[i] === "berg" || art[i] === "schluss");
+  const gm = berg.length ? berg.reduce((a, b) => a + b, 0) / berg.length : 0;
+  const ziele = p0 => gs.map((s, i) => art[i] === "ein" ? p0 * BERG.einfahren : art[i] === "aus" ? p0 * BERG.ausfahren
+    : Math.max(gangW(s), p0 * Math.min(1 + BERG.spanne, Math.max(1 - BERG.spanne, 1 + BERG.k * 100 * (s - gm)))));
+  // Budget bis zum Schluss durchrechnen; reicht es nicht, Grundleistung senken
+  let p0 = co.bergW - (co.bergSenkung || 0), ziel;
+  for (;; p0 -= 5) {      // mindestens einmal rechnen; bei 80 W Schluss, p0 passt dann zu ziel
+    ziel = ziele(p0);
+    let wbal = co.cfg.w_prime, ok = true;
+    for (let i = 0; i < n && art[i] !== "schluss" && art[i] !== "aus"; i++) {
+      wbal = wbalSchritt(wbal, ziel[i], 100 / Math.max(0.5, simTempo(ziel[i], gs[i])));
+      if (wbal < BERG.plan_reserve * co.cfg.w_prime) { ok = false; break; }
+    }
+    if (ok || p0 - 5 < 80) break;
+  }
+  co.plan = { ziel: ziel.map(Math.round), art, gs, gipfel, gm, p0 };
+}
+
+function bergIndex() { return Math.min(co.plan.ziel.length - 1, Math.max(0, Math.floor(pos() / 100))); }
+function bergZiel() {
+  const pl = co.plan, i = bergIndex(), cp = co.cfg.ftp;
+  if (pl.art[i] === "schluss") {
+    // höchste Leistung, deren Verbrauch über CP bis zum Gipfel in den W′-Rest passt
+    const rest = Math.max(50, pl.gipfel - pos()), s = (punkt(pl.gipfel).ele - punkt(pos()).ele) / rest;
+    let p = cp;
+    for (let q = cp; q <= cp * BERG.max_faktor; q += 5) {
+      if ((q - cp) * rest / Math.max(0.5, simTempo(q, s)) <= Math.max(0, co.wbal)) p = q; else break;
+    }
+    // beim Eintritt festlegen, danach nur noch senken (sonst lief es gegen Ende um ~30 % hoch, 22.10.)
+    p = Math.round(Math.max(p, pl.ziel[i]));
+    co.schlussZiel = Math.min(co.schlussZiel ?? p, p);
+    return co.schlussZiel;
+  }
+  let p = pl.ziel[i];
+  if (pl.art[i] === "berg" && co.wbal < BERG.reserve * co.cfg.w_prime) p = Math.max(gangW(pl.gs[i]), Math.min(p, cp - 10));
+  return Math.round(p);
+}
+// Nächstes Stück voraus, das mindestens vorschau_delta W mehr verlangt und vorschau_laenge m lang ist
+function bergVorschau() {
+  const pl = co.plan, i = bergIndex(), jetzt = pl.ziel[i], n = pl.ziel.length;
+  const von = Math.ceil((pos() + BERG.vorschau_min) / 100), bis = Math.min(n - 1, Math.floor((pos() + BERG.vorschau_m) / 100));
+  for (let j = von; j <= bis; j++) {
+    if (pl.art[j] !== "berg" || pl.ziel[j] < jetzt + BERG.vorschau_delta) continue;
+    let k = j; while (k + 1 < n && pl.art[k + 1] === "berg" && pl.ziel[k + 1] >= jetzt + BERG.vorschau_delta) k++;
+    const laenge = (k - j + 1) * 100;
+    if (laenge < BERG.vorschau_laenge) { j = k; continue; }
+    const teil = pl.ziel.slice(j, k + 1), sg = pl.gs.slice(j, k + 1);
+    return { bei: j * 100, weg: j * 100 - pos(), laenge, ziel: Math.round(teil.reduce((a, b) => a + b, 0) / teil.length),
+             grad: sg.reduce((a, b) => a + b, 0) / sg.length, jetzt };
+  }
+  return null;
+}
+function bergKnoepfe() {
+  const berg = co.modus === "berg";
+  $("btnModus").textContent = berg ? "Berg" : "Grundlage";
+  $("btnModus").classList.toggle("an", berg);
+  $("btnModus").disabled = !co.cfg;
+  $("bergW").style.display = berg ? "" : "none";
+  $("bergW").value = co.bergW;
+}
+$("bergW").replaceChildren(...W_LISTE.map(w => new Option(`${w} W`, w)));
+$("btnModus").onclick = () => {
+  if (!co.cfg) return;
+  if (!(co.cfg.ftp > 0 && co.cfg.w_prime > 0)) { status("Berg-Modus: ftp und w_prime in COACHING (lokal.py) fehlen"); return; }
+  co.modus = co.modus === "berg" ? "grundlage" : "berg";
+  coachReset(); coachKnoepfe();
+};
+$("bergW").onchange = e => { co.bergW = +e.target.value; bergPlan(); coachKnoepfe(); };
+
+function coachReset() {
+  const c = co.cfg || {};
+  Object.assign(co, {
+    uhr: 0, naechste: 0, proben: [],
+    wbal: c.w_prime || 0, bergSenkung: 0, schlussGesagt: false, schlussZiel: null, budgetGesagt: false, vorschauBis: -1e9, ziel: null,
+    wMin: c.watt_min, wMax: c.watt_max, decke: co.modus === "berg" && c.hf_decke_berg ? c.hf_decke_berg : c.hf_decke,
+    kadMin: co.modus === "berg" ? BERG.kad_min : c.kadenz_min,   // am Berg reicht der leichteste Gang nicht für mehr
+    hfAlarm: false, band: "drin", ueberSeit: null, kadSeit: null, kadSerie: 0, bandSeit: null, gutLetzt: -1e9,
+    letzteAnsage: -1e9, letzte: {}, rampeBei: -1e9, nachlassBei: -1e9,
+    tf: { status: c.ref_watt && c.ref_hf ? "wartet" : "aus", werte: [], delta: null, melden: null },
+    text: "", art: "", bis: 0, p3: null, p30: null, hf: null, trend: null,
+  });
+  bergPlan();
+}
+coachReset();
+
+function coachKonfigurieren(c) {
+  const noetig = ["watt_min", "watt_max", "hf_decke", "kadenz_min"];
+  if (!c || noetig.some(k => !(c[k] > 0))) { co.cfg = null; coachKnoepfe(); return; }
+  for (const k of Object.keys(c)) if (k in COACH && typeof c[k] === "number") COACH[k] = c[k];
+  co.cfg = c;
+  try {
+    const g = JSON.parse(localStorage.getItem("iride.coach") || "{}");
+    co.an = g.an !== false; co.ton = !!g.ton;
+    co.modus = g.modus === "berg" && c.ftp > 0 && c.w_prime > 0 ? "berg" : "grundlage";
+    if (W_LISTE.includes(g.bergW)) co.bergW = g.bergW;
+  } catch (e) { co.an = true; }
+  coachReset(); coachKnoepfe();
+  // iOS/Bluefy: Sprache erst nach einer Geste – die erste Berührung schaltet sie still frei
+  if (co.ton) addEventListener("pointerdown", () => sprechen(" ", 0), { once: true });
+}
+
+function mittel(sek, feld) {
+  let n = 0, s = 0;
+  for (let i = co.proben.length - 1; i >= 0 && co.proben[i].t > co.uhr - sek; i--) {
+    const v = co.proben[i][feld];
+    if (v != null) { s += v; n++; }
+  }
+  return n ? s / n : null;
+}
+function hfTrend() {   // bpm/min, Steigung der Regressionsgeraden
+  const ps = co.proben.filter(p => p.hf != null && p.t > co.uhr - COACH.hf_fenster);
+  if (ps.length < COACH.hf_fenster / 3) return null;
+  const mt = ps.reduce((a, p) => a + p.t, 0) / ps.length, mh = ps.reduce((a, p) => a + p.hf, 0) / ps.length;
+  let zaehler = 0, nenner = 0;
+  for (const p of ps) { zaehler += (p.t - mt) * (p.hf - mh); nenner += (p.t - mt) ** 2; }
+  return nenner ? zaehler / nenner * 60 : null;
+}
+
+function coachTakt(dt) {
+  if (!co.an || !co.cfg) return;
+  const hfDa = Date.now() - z.hfZeit < VERALTET_MS;
+  co.uhr += dt;
+  while (co.naechste <= co.uhr) {
+    const p = { t: co.naechste, w: z.watt, hf: hfDa ? z.hf : null, kad: z.kadenz, s: steigung(pos()), z: co.ziel };
+    co.proben.push(p); co.naechste += 1;
+    if (co.plan && p.w != null) co.wbal = Math.min(co.cfg.w_prime, wbalSchritt(co.wbal, p.w, 1));
+    tfProbe(p);
+  }
+  const alt = co.uhr - Math.max(120, COACH.hf_fenster);
+  while (co.proben.length && co.proben[0].t < alt) co.proben.shift();
+  regeln();
+}
+
+// Tagesform: HF im Flachen bei Referenzleistung gegen die Referenz; deutlich höher → Band senken
+function tfProbe(p) {
+  const tf = co.tf, c = co.cfg;
+  if ((tf.status !== "wartet" && tf.status !== "läuft") || z.fahrzeit < COACH.tf_ab) return;
+  if (z.fahrzeit <= COACH.tf_bis) {
+    tf.status = "läuft";
+    const p30 = mittel(30, "w");
+    if (p.hf != null && p30 != null && Math.abs(p.s) < 0.02 && Math.abs(p30 - c.ref_watt) <= COACH.tf_fenster)
+      tf.werte.push(p.hf - COACH.hf_pro_watt * (p30 - c.ref_watt));
+    return;
+  }
+  if (tf.werte.length < COACH.tf_proben) {
+    tf.status = "ohne";
+    coachLog("tagesform", `kein Vergleich, ${tf.werte.length} s gültig`);
+    return;
+  }
+  tf.delta = tf.werte.reduce((a, b) => a + b, 0) / tf.werte.length - c.ref_hf;
+  // Kontroll-HF der Fahrt für den Verlauf („Form“), auf die Referenzleistung umgerechnet
+  if (fahrt) fahrt.tf = { hf: +(c.ref_hf + tf.delta).toFixed(1), w: c.ref_watt, n: tf.werte.length };
+  const d = vz(tf.delta);
+  if (tf.delta > COACH.tf_toleranz && co.plan) {
+    co.bergSenkung = COACH.tf_senkung; bergPlan(); tf.status = "gesenkt";
+    tf.melden = { art: "gelb", text: `Tagesform: Puls ${d} bei ${c.ref_watt} W – Grundleistung heute ${co.plan.p0} W`,
+                  sprich: `Puls heute höher. Grundleistung ${co.plan.p0} Watt.` };
+  } else if (tf.delta > COACH.tf_toleranz) {
+    co.wMin -= COACH.tf_senkung; co.wMax -= COACH.tf_senkung; tf.status = "gesenkt";
+    tf.melden = { art: "gelb", text: `Tagesform: Puls ${d} bei ${c.ref_watt} W – Ziel heute ${co.wMin}–${co.wMax} W`,
+                  sprich: `Puls heute höher. Ziel ${co.wMin} bis ${co.wMax} Watt.` };
+  } else {
+    tf.status = "ok";
+    tf.melden = { art: "gruen", text: `Tagesform ok: Puls ${d} bei ${c.ref_watt} W`, sprich: "Tagesform gut." };
+  }
+}
+const vz = v => (v >= 0 ? "+" : "−") + zahl(Math.abs(v));
+
+// Regeln nach Priorität; es kommt immer nur eine Ansage, frühestens COACH.abstand s nach der letzten
+function regeln() {
+  const K = COACH, t = co.uhr, s = steigung(pos()), w = Math.round;
+  // Berg-Modus: das Band folgt dem Ziel der Stelle; im Schluss gibt es kein Zuviel
+  const bArt = co.plan ? co.plan.art[bergIndex()] : null;
+  if (co.plan) {
+    co.ziel = bergZiel();
+    const zm = Math.round(mittel(30, "z") ?? co.ziel);   // gegen das Ziel vergleichen, das im p30-Fenster galt
+    co.wMin = zm - BERG.band; co.wMax = bArt === "schluss" ? co.ziel + 200 : zm + BERG.band;
+    if (co.wbal > 0.5 * co.cfg.w_prime) co.budgetGesagt = false;
+  }
+  const p3 = co.p3 = mittel(3, "w"), p30 = co.p30 = mittel(30, "w");
+  const hf = co.hf = mittel(5, "hf"), kad = mittel(5, "kad"), trend = co.trend = hfTrend();
+  const hfVor = hf == null ? null : hf < co.decke - K.hf_trend_nah ? hf : hf + Math.max(0, trend || 0) * K.hf_vorschau;
+  if (hf == null) co.hfAlarm = false;
+  else if (hf > co.decke || hfVor > co.decke) co.hfAlarm = true;
+  else if (hf <= co.decke - K.hf_hysterese) co.hfAlarm = false;
+  if (bArt === "schluss") co.hfAlarm = false;   // all out: der Puls darf hoch
+  if (p30 != null) {
+    if (p30 > co.wMax + K.band_hysterese) co.band = "drueber";
+    else if (p30 < co.wMin - K.band_hysterese) co.band = "drunter";
+    else if (p30 >= co.wMin && p30 <= co.wMax) co.band = "drin";
+  }
+  const seit = (bed, alt) => bed ? (alt ?? t) : null;
+  co.ueberSeit = seit(p3 != null && p3 > co.wMax + K.ueberzieh, co.ueberSeit);
+  co.kadSeit = seit(kad != null && kad < co.kadMin && s >= K.kad_steigung, co.kadSeit);
+  if (co.kadSeit == null) co.kadSerie = 0;
+  const imBand = co.band === "drin" && !co.hfAlarm;
+  co.bandSeit = seit(imBand, co.bandSeit);
+  if (!imBand) co.gutLetzt = -1e9;
+
+  const anlauf = t < K.anlauf;
+  const ueberzieht = co.ueberSeit != null && t - co.ueberSeit >= K.ueberzieh_dauer;
+  const r = rampeSuchen(K.rampe_weg), sHinter = steigung(pos() - 100);
+  const rampe = !!r && r.grad >= K.rampe_ab && r.grad - s >= K.rampe_delta && Math.abs(pos() + r.weg - co.rampeBei) > 200;
+  const nachlass = z.dist >= 150 && sHinter >= K.rampe_ab - 0.01 && sHinter - s >= K.nachlass_delta
+    && pos() - co.nachlassBei > 300;
+  const ziel = co.plan ? `Ziel ${co.ziel} W` : `Ziel ${co.wMin}–${co.wMax}`;
+  const vor = co.plan && bArt !== "schluss" ? bergVorschau() : null;
+  const rest = co.plan ? co.plan.gipfel - pos() : 0;
+  const pct = co.plan ? Math.round(100 * Math.max(0, co.wbal) / co.cfg.w_prime) : 0;
+  const kand = [
+    { id: "hf", wenn: co.hfAlarm, art: "rot", sprich: "Puls hoch. Langsamer.",
+      text: (hf > co.decke ? `Puls ${w(hf)} über ${co.decke}` : trend > 0.5 ? `Puls ${w(hf)} steigt ${vz(trend)}/min`
+          : `Puls ${w(hf)} nah an ${co.decke}`) + ` – langsamer (${w(p30)} W)` },
+    { id: "tagesform", wenn: !!co.tf.melden, einmal: true, ...co.tf.melden },
+    { id: "schluss", wenn: bArt === "schluss" && !co.schlussGesagt, einmal: true, art: "rot",
+      text: `Noch ${zahl(rest / 1000, 1)} km – alles raus: ${co.ziel} W`, sprich: `Letzter Kilometer. Alles raus, ${co.ziel} Watt.` },
+    { id: "budget", wenn: bArt === "berg" && co.wbal < BERG.reserve * co.cfg.w_prime && !co.budgetGesagt, einmal: true,
+      art: "gelb", text: `Reserve knapp (W′ ${pct} %) – ${co.ziel} W halten`, sprich: `Reserve knapp. ${co.ziel} Watt halten.` },
+    { id: "vorschau", wenn: !!vor && vor.bei > co.vorschauBis, einmal: true, art: "blau",
+      text: vor ? `In ${Math.round(vor.weg / 50) * 50} m ${zahl(vor.grad * 100, 1)} % über ${vor.laenge} m – bis dahin ${vor.jetzt} W, dort ${vor.ziel} W` : "",
+      sprich: vor ? `In ${Math.round(vor.weg / 50) * 50} Metern ${zahl(vor.grad * 100, 0)} Prozent. Bis dahin ${vor.jetzt}, dort ${vor.ziel} Watt.` : "" },
+    { id: "ruhiger", wenn: !co.hfAlarm && (ueberzieht || !anlauf && co.band === "drueber")
+        && (!co.plan || co.wbal < BERG.knapp * co.cfg.w_prime), art: ueberzieht ? "rot" : "gelb",
+      text: `${w(ueberzieht ? p3 : p30)} W – ruhiger, ${ziel}${co.plan ? ` (W′ ${pct} %)` : ""}`, sprich: "Ruhiger." },
+    { id: "mehr", wenn: !anlauf && !co.hfAlarm && co.band === "drunter", art: "gelb",
+      text: `${w(p30)} W – etwas mehr, ${ziel}`, sprich: "Etwas mehr." },
+    { id: "leichter", wenn: co.kadSeit != null && t - co.kadSeit >= K.kad_dauer
+        && (co.kadSerie < 2 || t - co.letzte.leichter >= K.kad_nachlass), art: "blau",
+      text: co.kadSerie < 2 ? `Kadenz ${w(kad)} – leichter schalten` : `Kadenz ${w(kad)} – kein Gang mehr? Watt halten`,
+      sprich: co.kadSerie < 2 ? "Leichter schalten." : "Watt halten." },
+    { id: "rampe", wenn: rampe, einmal: true, art: "blau", sprich: "Rampe. Jetzt schalten, Watt halten.",
+      text: r ? `${zahl(r.grad * 100, 1)} % ${r.weg < 30 ? "beginnt" : `in ${Math.round(r.weg / 10) * 10} m`} – jetzt schalten, Watt halten` : "" },
+    { id: "nachlass", wenn: nachlass, einmal: true, art: "blau", sprich: "Schwerer schalten, Watt halten.",
+      text: "Steigung lässt nach – schwerer schalten, Watt halten" },
+    { id: "gut", wenn: !anlauf && co.bandSeit != null && t - co.bandSeit >= K.gut_nach && t - co.gutLetzt >= K.gut_wieder,
+      einmal: true, art: "gruen", text: `gut so – ${w(p30)} W`, sprich: "Gut so." },
+  ];
+  if (t - co.letzteAnsage < K.abstand) return;
+  for (const k of kand) {
+    if (!k.wenn || (!k.einmal && t - (co.letzte[k.id] ?? -1e9) < K.wiederholen)) continue;
+    co.letzteAnsage = t; co.letzte[k.id] = t;
+    co.text = k.text; co.art = k.art; co.bis = Date.now() + 6000;
+    sprechen(k.sprich);
+    coachLog(k.id, k.text);
+    if (k.id === "tagesform") co.tf.melden = null;
+    if (k.id === "schluss") co.schlussGesagt = true;
+    if (k.id === "budget") co.budgetGesagt = true;
+    if (k.id === "vorschau") co.vorschauBis = vor.bei + vor.laenge;   // dieses Stück nicht noch einmal
+    if (k.id === "rampe") co.rampeBei = pos() + r.weg;
+    if (k.id === "nachlass") co.nachlassBei = pos();
+    if (k.id === "gut") co.gutLetzt = t;
+    if (k.id === "leichter") co.kadSerie++;
+    return;
+  }
+}
+
+function coachLog(id, text) {
+  const f = v => v == null ? "" : Math.round(v);
+  protokoll(`coach ${id} zeit=${f(z.fahrzeit)} dist=${f(z.dist)} w3=${f(co.p3)} w30=${f(co.p30)} hf=${f(co.hf)}`
+    + ` trend=${co.trend == null ? "" : co.trend.toFixed(1)} kad=${f(mittel(5, "kad"))} s=${(steigung(z.dist) * 100).toFixed(1)}`
+    + ` ziel=${co.wMin}-${co.wMax}/${co.decke}${bergProtokoll()} text=${encodeURIComponent(text)}`);
+}
+function bergProtokoll() {
+  return co.plan ? ` modus=berg p0=${co.plan.p0} wbal=${Math.round(co.wbal)} abschnitt=${co.plan.art[bergIndex()]}` : "";
+}
+// Zusatz fürs Positionsprotokoll alle 10 s: Grundlage für Zeit im Band und HF-Überschreitungen
+function coachProtokoll() {
+  if (!co.an || !co.cfg || co.p30 == null) return "";
+  return ` w30=${Math.round(co.p30)} ziel=${co.wMin}-${co.wMax}/${co.decke} alarm=${co.hfAlarm ? 1 : 0}${bergProtokoll()}`;
+}
+
+function coachAnzeige(frisch) {
+  const aktiv = co.an && co.cfg, kw = $("kWatt"), kh = $("kHf");
+  kw.classList.remove("ok", "warn", "alarm"); kh.classList.remove("alarm");
+  $("tWatt").textContent = !aktiv ? "Leistung" : co.plan && co.ziel != null
+    ? `Leistung · Ziel ${co.ziel}${co.plan.art[bergIndex()] === "schluss" ? " · alles raus" : ""}` : `Leistung · ${co.wMin}–${co.wMax}`;
+  $("tHf").textContent = aktiv ? `Herzfrequenz · ≤ ${co.decke}` : "Herzfrequenz";
+  if (aktiv && frisch && co.p3 != null && z.tempo > 0.5 && !z.scharf) {
+    let kl = "ok", pf = "✓";
+    if (co.hfAlarm || co.p3 > co.wMax + COACH.ueberzieh) { kl = "alarm"; pf = "↓"; }
+    else if (co.band === "drueber") { kl = "warn"; pf = "↓"; }
+    else if (co.band === "drunter") { kl = "warn"; pf = "↑"; }
+    kw.classList.add(kl);
+    $("wWatt").innerHTML = `${zahl(co.p3)}<small>W</small><span class="pfeil">${pf}</span>`;
+    if (co.hfAlarm) kh.classList.add("alarm");
+  }
+  const el = $("coach"), sichtbar = aktiv && Date.now() < co.bis;
+  el.className = sichtbar ? "an " + co.art : "";
+  if (sichtbar && el.textContent !== co.text) el.textContent = co.text;
+  $("coachInfo").textContent = aktiv ? coachInfo() : "";
+}
+function coachInfo() {
+  const tf = co.tf, d = tf.delta == null ? "" : vz(tf.delta) + " bpm";
+  const tfText = {
+    aus: "", wartet: `Tagesform ab ${zahl(COACH.tf_ab / 60)} min im Flachen bei ~${co.cfg.ref_watt} W`,
+    "läuft": `Tagesform läuft (${tf.werte.length} s gültig)`, ok: `Tagesform ok (${d})`,
+    gesenkt: `Tagesform ${d} → Ziel gesenkt`, ohne: "Tagesform: kein Vergleich",
+  }[tf.status];
+  const pl = co.plan;
+  const berg = pl ? `Berg ${pl.p0 < co.bergW ? `${co.bergW} → ${pl.p0}` : pl.p0} W · W′ ${Math.round(100 * Math.max(0, co.wbal) / co.cfg.w_prime)} %` : "";
+  return [`Coach · Kadenz ≥ ${co.kadMin}`, berg, co.trend != null ? `HF-Trend ${vz(co.trend)}/min` : "", tfText]
+    .filter(Boolean).join(" · ");
+}
+
+// iOS: Ansagen dürfen Musik aus einer anderen App nicht anhalten. Audio Session API (Safari/WebKit 17+):
+// "ambient" mischt sich unter die Musik, "transient" senkt sie für die Ansage ab und gibt sie danach wieder frei.
+// Ohne die API (ältere WebViews) bleibt es beim iOS-Verhalten: Musik hält an. Das Log zeigt, was das Gerät kann.
+const sitzung = typ => { try { if (navigator.audioSession) navigator.audioSession.type = typ; } catch (e) {} };
+sitzung("ambient");
+protokoll("audiosession " + (navigator.audioSession ? "ja " + navigator.audioSession.type : "nein"));
+
+let stimme = null;
+function sprechen(text, laut = 1) {
+  if (!co.ton || !("speechSynthesis" in window)) return;
+  try {
+    if (!stimme) stimme = speechSynthesis.getVoices().find(v => /^de/i.test(v.lang)) || null;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "de-DE"; u.rate = 1.05; u.volume = laut;
+    if (stimme) u.voice = stimme;
+    u.onend = u.onerror = () => sitzung("ambient");
+    sitzung("transient");
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+function coachKnoepfe() {
+  $("btnCoach").classList.toggle("an", !!(co.an && co.cfg));
+  $("btnCoach").textContent = co.cfg ? (co.an ? "Coach an" : "Coach aus") : "Coach –";
+  $("btnTon").classList.toggle("an", co.ton);
+  // Zustand mit Symbol (vorher missverständlich: „Ton aus“ wurde als Aktion gelesen und schaltete den Ton ein)
+  $("btnTon").textContent = co.ton ? "🔊 Sprache an" : "🔇 Sprache aus";
+  $("btnTon").title = co.ton ? "Tippen: Sprachansagen stumm schalten" : "Tippen: Sprachansagen einschalten";
+  $("btnTon").disabled = !("speechSynthesis" in window);
+  try { localStorage.setItem("iride.coach", JSON.stringify({ an: co.an, ton: co.ton, modus: co.modus, bergW: co.bergW })); } catch (e) {}
+  bergKnoepfe();
+}
+$("btnCoach").onclick = () => {
+  if (!co.cfg) { status("Coach: COACHING in lokal.py fehlt oder unvollständig"); return; }
+  co.an = !co.an; coachReset(); coachKnoepfe();
+};
+$("btnTon").onclick = () => {
+  co.ton = !co.ton;
+  if (co.ton) sprechen("Ton an");          // in der Geste sprechen: schaltet die Sprache in iOS frei
+  else try { speechSynthesis.cancel(); } catch (e) {}
+  coachKnoepfe();
+};
+
+// ------------------------------------------------------------------ Bluetooth
+let geraet = null, manuellGetrennt = false, kickrAktiv = false;
+
+function indoorBikeData(dv) {
+  // FTMS Indoor Bike Data: Felder in fester Reihenfolge, je nach Flag-Bit vorhanden
+  const f = dv.getUint16(0, true); let o = 2;
+  const mitTempo = !(f & 0x0001);                                      // Bit 0 = "More Data": kein Tempo im Paket
+  if (mitTempo) { z.tempo = dv.getUint16(o, true) / 100; o += 2; }
+  if (f & 0x0002) o += 2;                                                 // mittleres Tempo
+  if (f & 0x0004) { z.kadenz = dv.getUint16(o, true) / 2; o += 2; }
+  if (f & 0x0008) o += 2;                                                 // mittlere Kadenz
+  if (f & 0x0010) {                                                       // Gesamtdistanz (uint24, m)
+    const d = dv.getUint16(o, true) + (dv.getUint8(o + 2) << 16); o += 3;
+    // Basis bleibt über BLE-Ausfälle erhalten: der Zähler des Kickr läuft weiter, die Lücke wird nachgeholt.
+    // Grenze nach Zeit (90 km/h); ein Neustart des Kickr (Zähler kleiner) ergibt ein riesiges Delta und wird verworfen.
+    if (z.kickrDistAlt != null) {
+      const delta = (d - z.kickrDistAlt + 0x1000000) % 0x1000000, s = (Date.now() - z.kickrDistZeit) / 1000;
+      if (delta < 500 + 25 * s) {
+        if (z.kurs && !z.scharf && !z.sim) z.dist = Math.min(z.kurs.laenge, z.dist + delta);
+        if (delta >= 50) protokoll(`kickr-dist nachgeholt=${delta} nach=${s.toFixed(0)}s dist=${z.dist.toFixed(0)}`);
+      } else protokoll(`kickr-dist verworfen delta=${delta} nach=${s.toFixed(0)}s`);
+    }
+    z.kickrDistAlt = d; z.kickrDistDa = true; z.kickrDistZeit = Date.now();
+  }
+  if (f & 0x0020) o += 2;                                                 // Widerstandsstufe
+  if (f & 0x0040) { z.watt = dv.getInt16(o, true); o += 2; }
+  if (f & 0x0080) o += 2;                                                 // mittlere Leistung
+  if (f & 0x0100) o += 5;                                                 // Energie
+  if (f & 0x0200) {                                                       // HF, falls der Kickr sie weiterreicht
+    const hf = dv.getUint8(o); o += 1;
+    if (hf > 0 && z.hfQuelle !== "gurt") { z.hf = hf; z.hfZeit = Date.now(); z.hfQuelle = "kickr"; }
+  }
+  if (mitTempo) z.datenZeit = Date.now();
+}
+
+let cpAlt = null;
+function cpMessung(dv) {
+  // Notbehelf ohne FTMS: Cycling Power Measurement mit Rad- und Kurbelumdrehungen
+  const f = dv.getUint16(0, true); let o = 2;
+  z.watt = dv.getInt16(o, true); o += 2;
+  if (f & 0x01) o += 1;
+  if (f & 0x04) o += 2;
+  const neu = {};
+  if (f & 0x10) { neu.rad = dv.getUint32(o, true); neu.radT = dv.getUint16(o + 4, true); o += 6; }
+  if (f & 0x20) { neu.kurbel = dv.getUint16(o, true); neu.kurbelT = dv.getUint16(o + 2, true); o += 4; }
+  if (cpAlt) {
+    if (neu.rad != null && cpAlt.rad != null) {
+      // Stillstand: gleiche Umdrehungszahl und Zeit; daran messen, wann sich das Rad zuletzt drehte
+      // (z.datenZeit taugt nicht, es wird bei jedem Paket neu gesetzt). Zähler kleiner = Sensor-Reset.
+      const dt = ((neu.radT - cpAlt.radT + 65536) % 65536) / 2048, n = neu.rad - cpAlt.rad;
+      if (dt > 0 && n >= 0 && n < 50) z.tempo = n * RADUMFANG / dt * 3.6;
+      else if (Date.now() - (cpAlt.radZeit || 0) > 2000) z.tempo = 0;
+    }
+    if (neu.kurbel != null && cpAlt.kurbel != null) {
+      const dt = ((neu.kurbelT - cpAlt.kurbelT + 65536) % 65536) / 1024;
+      if (dt > 0) z.kadenz = ((neu.kurbel - cpAlt.kurbel + 65536) % 65536) / dt * 60;
+    }
+  }
+  const radNeu = neu.rad != null && (!cpAlt || neu.rad !== cpAlt.rad);
+  cpAlt = { ...cpAlt, ...neu };
+  if (radNeu) cpAlt.radZeit = Date.now();
+  z.datenZeit = Date.now();
+}
+
+// FTMS Fitness Machine Status: Op-Code 0x12 = Indoor Bike Simulation Parameters Changed
+// (Wind sint16 0,001 m/s, Steigung sint16 0,01 %, Crr uint8 0,0001, Cw uint8 0,01 kg/m)
+function ftmsStatus(dv) {
+  const op = dv.getUint8(0);
+  if (op === 0x12 && dv.byteLength >= 5) {
+    z.kickrSteigung = dv.getInt16(3, true) / 100; z.kickrSteigungZeit = Date.now();
+    protokoll(`ftms-sim grad=${z.kickrSteigung.toFixed(2)} dist=${z.dist.toFixed(0)}`
+      + ` kurs=${(steigung(z.dist) * 100).toFixed(1)} wind=${(dv.getInt16(1, true) / 1000).toFixed(2)}`
+      + (dv.byteLength >= 7 ? ` crr=${dv.getUint8(5) / 10000} cw=${dv.getUint8(6) / 100}` : ""));
+  } else {
+    protokoll(`ftms-status op=0x${op.toString(16)} bytes=${[...new Uint8Array(dv.buffer)].map(b => b.toString(16).padStart(2, "0")).join("")}`);
+  }
+}
+
+// Wiederverbinden für ein BLE-Gerät. st.gen zählt Verbindungswahlen hoch: eine neue Wahl beendet alte
+// Schleifen; st.laeuft verhindert eine zweite Schleife für dieselbe Wahl. Erfolg erst nach startNotifications;
+// scheitert das Abonnieren bei stehender GATT-Verbindung, wird getrennt, sonst endete die Schleife ohne Daten.
+// Wiederverbinden nach Abbruch, solange weiter() gilt. Ein Versuch bekommt höchstens BLE_ABO_MS, sonst blockiert ein
+// hängendes gatt.connect() in Bluefy alle weiteren. Versuche 1–5, dann jeder 10. ins Protokoll.
+// Pause: 3 s, ab Versuch BLE_SCHNELL[name] BLE_LANGSAM_MS. Die 4iiii schläft, wenn die Kurbel steht, und nimmt die
+// Verbindung dann kurz an und lässt sie wieder fallen: alle 3 s ein „Verbunden“ von Bluefy (25.10.2026, 14:42–14:48).
+const BLE_ABO_MS = 15000, BLE_LANGSAM_MS = 30000;
+const BLE_SCHNELL = { kickr: 20, hf: 10, kurbel: 5 };
+async function bleWiederVerbinden(st, g, weiter, abo, melden, name = "ble", ok = null) {
+  const gen = st.gen;
+  if (!g || st.laeuft === gen) return;
+  st.laeuft = gen;
+  try {
+    // Flattern: Abbruch kurz nach erfolgreichem Wiederverbinden zählt als Fehlversuch, ab dem dritten erst lange Pause
+    st.flattern = Date.now() - (st.seit || 0) < 20000 ? (st.flattern || 0) + 1 : 0;
+    if (st.flattern >= 3) {
+      protokoll(`${name}-status flattert n=${st.flattern} – Pause ${BLE_LANGSAM_MS / 1000}s`);
+      await new Promise(ok => setTimeout(ok, BLE_LANGSAM_MS));
+    }
+    for (let v = 1; weiter() && st.gen === gen && !g.gatt.connected; v++) {
+      if (melden) melden(v);
+      try {
+        await Promise.race([abo(), new Promise((_, nein) => setTimeout(() => nein(new Error("Zeitüberschreitung")), BLE_ABO_MS))]);
+        protokoll(`${name}-status wieder verbunden versuch=${v}`);
+        st.seit = Date.now();
+        if (ok) ok();
+        return;
+      } catch (e) {
+        if (v <= 5 || v % 10 === 0)
+          protokoll(`${name}-status versuch=${v} fehler=${String(e && e.message || e).replace(/\s+/g, "_").slice(0, 80)}`);
+        if (g.gatt.connected) g.gatt.disconnect();
+        await new Promise(ok => setTimeout(ok, v >= (BLE_SCHNELL[name] || 10) ? BLE_LANGSAM_MS : 3000));
+      }
+    }
+  } finally { if (st.laeuft === gen) st.laeuft = null; }
+}
+const kickrBle = { gen: 0, laeuft: null }, hfBle = { gen: 0, laeuft: null }, kurbelBle = { gen: 0, laeuft: null };
+
+async function abonnieren() {
+  const server = await geraet.gatt.connect();
+  try {
+    const dienst = await server.getPrimaryService(FTMS);
+    const ch = await dienst.getCharacteristic(INDOOR_BIKE_DATA);
+    ch.addEventListener("characteristicvaluechanged", e => indoorBikeData(e.target.value));
+    await ch.startNotifications();
+    status(`${geraet.name || "Kickr"} verbunden (FTMS)`);
+    // Nur mithören: meldet der Kickr, welche Steigung der Edge gerade gesetzt hat? (Fitness Machine Status)
+    try {
+      const st = await dienst.getCharacteristic(FTMS_STATUS);
+      st.addEventListener("characteristicvaluechanged", e => ftmsStatus(e.target.value));
+      await st.startNotifications();
+      protokoll("ftms-status abonniert");
+    } catch (e) { protokoll("ftms-status nicht verfügbar " + (e && e.message || e)); }
+  } catch (e) {
+    const dienst = await server.getPrimaryService(CPS);
+    const ch = await dienst.getCharacteristic(CP_MESSUNG);
+    cpAlt = null; z.kickrDistDa = false;     // CPS hat keine Gesamtdistanz: wieder integrieren
+    ch.addEventListener("characteristicvaluechanged", e2 => cpMessung(e2.target.value));
+    await ch.startNotifications();
+    status(`${geraet.name || "Kickr"} verbunden (Cycling Power, Tempo geschätzt)`);
+  }
+}
+
+function wiederVerbinden() {
+  if (kickrBle.laeuft == null && !manuellGetrennt && geraet && !geraet.gatt.connected) protokoll("kickr-status getrennt");
+  return bleWiederVerbinden(kickrBle, geraet, () => !manuellGetrennt, abonnieren,
+    v => status(`Verbindung verloren – Versuch ${v} …`), "kickr");
+}
+// Bluefy: Der Kickr kann als verbunden gelten und trotzdem nichts mehr senden (25.10.2026, 14:38, ohne
+// Trennmeldung; die 4iiii lief weiter). Nach KICKR_STILLE_MS ohne Daten trennen und neu verbinden,
+// höchstens alle KICKR_WACHE_MS (steht der Kickr still und sendet deshalb nichts, schadet das nicht).
+function kickrWache() {
+  const jetzt = Date.now();
+  if (!kickrAktiv || manuellGetrennt || z.sim || !geraet || !geraet.gatt.connected || kickrBle.laeuft != null) return;
+  if (!z.datenZeit || jetzt - z.datenZeit < KICKR_STILLE_MS || jetzt - kickrWacheZuletzt < KICKR_WACHE_MS) return;
+  kickrWacheZuletzt = jetzt;
+  protokoll(`kickr-stille ${Math.round((jetzt - z.datenZeit) / 1000)}s verbunden=1 – neu verbinden`);
+  geraet.gatt.disconnect();
+  wiederVerbinden();
+}
+// Zustand für fehlerMelden(): letzte Taste, Verbindungen, Alter der Daten (einziger globaler Name aus diesem Block)
+let letzteTaste = "";
+addEventListener("click", e => { const b = e.target.closest && e.target.closest("button"); if (b) letzteTaste = b.id; }, true);
+window.irideKontext = () => {
+  const alter = t => (t ? Math.round((Date.now() - t) / 1000) + "s" : "–");
+  return `taste=${letzteTaste || "–"} sicht=${document.visibilityState} kickr=${geraet ? (geraet.gatt.connected ? "verb" : "getr") : "–"}`
+    + ` kickr_daten=${alter(z.datenZeit)} wieder=${kickrBle.laeuft != null ? 1 : 0}`
+    + ` hf=${hfGeraet ? (hfGeraet.gatt.connected ? "verb" : "getr") : "–"} kurbel=${kurbelGeraet ? (kurbelGeraet.gatt.connected ? "verb" : "getr") : "–"}`
+    + ` kurbel_daten=${alter(z.kurbelZeit)} dist=${Math.round(z.dist)}`;
+};
+
+$("btnKickr").onclick = async () => {
+  if (!navigator.bluetooth) {
+    status(window.isSecureContext ? "kein Web Bluetooth – Bluefy benutzen" : "kein Web Bluetooth (unsicherer Kontext, https nutzen)");
+    return;
+  }
+  if (geraet && geraet.gatt.connected) {
+    manuellGetrennt = true; kickrAktiv = false; geraet.gatt.disconnect();
+    $("btnKickr").textContent = "Kickr verbinden"; $("btnKickr").classList.remove("an");
+    status("getrennt"); return;
+  }
+  try {
+    status("Gerät wählen …");
+    await kickrMit(await navigator.bluetooth.requestDevice(GERAETE.kickr.wahl()));
+  } catch (e) {
+    // verbunden, aber nicht abonniert: trennen, sonst sieht es verbunden aus und liefert nichts
+    if (geraet && geraet.gatt.connected) { manuellGetrennt = true; kickrAktiv = false; geraet.gatt.disconnect(); }
+    status("Bluetooth: " + e.message);
+  }
+};
+
+// Gewähltes oder schon erlaubtes Gerät als Kickr übernehmen (Knopf, „Alle verbinden“)
+async function kickrMit(g) {
+  kickrBle.gen++;                            // laufende Wiederverbindung des alten Geräts beenden
+  geraet = g; manuellGetrennt = false; kickrAktiv = true;
+  bleHorchen(g, wiederVerbinden);
+  await abonnieren();
+  kickrVerbunden();
+}
+function kickrVerbunden() {
+  geraetMerken("kickr", geraet);
+  $("btnKickr").textContent = "Kickr trennen"; $("btnKickr").classList.add("an");
+  if (z.sim) $("btnSim").click();
+  wachHalten();
+}
+
+// ------------------------------------------------------------------ Herzfrequenzgurt (BLE Heart Rate 0x180D)
+let hfGeraet = null, hfManuell = false;
+function hfMessung(dv) {
+  const f = dv.getUint8(0);
+  z.hf = (f & 0x01) ? dv.getUint16(1, true) : dv.getUint8(1);
+  z.hfZeit = Date.now(); z.hfQuelle = "gurt";
+}
+async function hfAbonnieren() {
+  const server = await hfGeraet.gatt.connect();
+  const ch = await (await server.getPrimaryService("heart_rate")).getCharacteristic("heart_rate_measurement");
+  ch.addEventListener("characteristicvaluechanged", e => hfMessung(e.target.value));
+  await ch.startNotifications();
+}
+function hfWiederVerbinden() {
+  z.hfQuelle = "";
+  if (hfBle.laeuft == null && !hfManuell && hfGeraet && !hfGeraet.gatt.connected) protokoll("hf-status getrennt");
+  return bleWiederVerbinden(hfBle, hfGeraet, () => !hfManuell, hfAbonnieren, null, "hf");
+}
+$("btnHf").onclick = async () => {
+  if (!navigator.bluetooth) { status("kein Web Bluetooth – Bluefy benutzen"); return; }
+  if (hfGeraet && hfGeraet.gatt.connected) {
+    hfManuell = true; hfGeraet.gatt.disconnect(); z.hfQuelle = "";
+    $("btnHf").textContent = "HF verbinden"; $("btnHf").classList.remove("an"); return;
+  }
+  try {
+    await hfMit(await navigator.bluetooth.requestDevice(GERAETE.hf.wahl()));
+  } catch (e) {
+    if (hfGeraet && hfGeraet.gatt.connected) { hfManuell = true; hfGeraet.gatt.disconnect(); }
+    status("HF: " + e.message);
+  }
+};
+
+async function hfMit(g) {
+  hfBle.gen++;
+  hfGeraet = g; hfManuell = false;
+  bleHorchen(g, hfWiederVerbinden);
+  await hfAbonnieren();
+  hfVerbunden();
+}
+function hfVerbunden() {
+  geraetMerken("hf", hfGeraet);
+  $("btnHf").textContent = "HF trennen"; $("btnHf").classList.add("an");
+}
+
+// ------------------------------------------------------------------ 4iiii-Kurbel (BLE Cycling Power 0x1818), nur zum Vergleich
+// Eigener Parser mit Ziel z.wattKurbel: cpMessung schreibt nach z.watt (Kickr) und bleibt dem Kickr vorbehalten.
+// Die Kurbel misst nur links und verdoppelt; sie steuert nichts, ein Ausfall berührt Kickr-Anzeige und Fahrt nicht.
+let kurbelGeraet = null, kurbelManuell = false, kurbelAlt = null;
+function kurbelMessung(dv) {
+  const f = dv.getUint16(0, true); let o = 2;
+  z.wattKurbel = dv.getInt16(o, true); o += 2;
+  if (f & 0x01) o += 1;                                                   // Pedalbalance
+  if (f & 0x04) o += 2;                                                   // akkumuliertes Drehmoment
+  if (f & 0x10) o += 6;                                                   // Radumdrehungen
+  if (f & 0x20) {                                                         // Kurbelumdrehungen → Kadenz
+    const n = dv.getUint16(o, true), t = dv.getUint16(o + 2, true);
+    if (kurbelAlt) {
+      const dt = ((t - kurbelAlt.t + 65536) % 65536) / 1024;
+      if (dt > 0) z.kadKurbel = ((n - kurbelAlt.n + 65536) % 65536) / dt * 60;
+      else if (Date.now() - kurbelAlt.zeit > 3000) z.kadKurbel = 0;
+    }
+    if (!kurbelAlt || n !== kurbelAlt.n) kurbelAlt = { n, t, zeit: Date.now() };
+  }
+  z.kurbelZeit = Date.now();
+}
+async function kurbelAbonnieren() {
+  const server = await kurbelGeraet.gatt.connect();
+  const ch = await (await server.getPrimaryService(CPS)).getCharacteristic(CP_MESSUNG);
+  kurbelAlt = null;
+  ch.addEventListener("characteristicvaluechanged", e => kurbelMessung(e.target.value));
+  await ch.startNotifications();
+  protokoll(`kurbel-status verbunden name=${(kurbelGeraet.name || "").replace(/\s/g, "_")}`);
+}
+function kurbelWiederVerbinden() {
+  if (kurbelBle.laeuft == null && !kurbelManuell && kurbelGeraet && !kurbelGeraet.gatt.connected) protokoll("kurbel-status getrennt");
+  return bleWiederVerbinden(kurbelBle, kurbelGeraet, () => !kurbelManuell, kurbelAbonnieren, null, "kurbel");
+}
+$("btnKurbel").onclick = async () => {
+  if (!navigator.bluetooth) { status("kein Web Bluetooth – Bluefy benutzen"); return; }
+  if (kurbelGeraet && kurbelGeraet.gatt.connected) {
+    kurbelManuell = true; kurbelGeraet.gatt.disconnect(); z.kurbelZeit = 0;
+    $("btnKurbel").textContent = "Kurbel verbinden"; $("btnKurbel").classList.remove("an"); kurbelAnzeige(); return;
+  }
+  try {
+    // Kickr und 4iiii melden beide Cycling Power: in der Auswahl die 4iiii nehmen, nicht den KICKR
+    await kurbelMit(await navigator.bluetooth.requestDevice(GERAETE.kurbel.wahl()));
+  } catch (e) {
+    // gescheitert: Gerät vergessen, sonst stünde dauerhaft „4iiii –“ in der Kachel
+    if (kurbelGeraet) { kurbelManuell = true; if (kurbelGeraet.gatt.connected) kurbelGeraet.gatt.disconnect(); }
+    kurbelGeraet = null; kurbelAnzeige();
+    status("Kurbel: " + e.message);
+  }
+};
+async function kurbelMit(g) {
+  if (/kickr/i.test(g.name || "")) throw new Error("das ist der Kickr – bitte die 4iiii wählen");
+  kurbelBle.gen++;
+  kurbelGeraet = g; kurbelManuell = false;
+  bleHorchen(g, kurbelWiederVerbinden);
+  await kurbelAbonnieren();
+  kurbelVerbunden();
+}
+function kurbelVerbunden() {
+  geraetMerken("kurbel", kurbelGeraet);
+  $("btnKurbel").textContent = "Kurbel trennen"; $("btnKurbel").classList.add("an");
+}
+
+// ------------------------------------------------------------------ Geräte automatisch verbinden
+// Es sind immer dieselben drei Geräte. Gemerkt werden id und Name (nur in diesem Browser, localStorage).
+// 1. Beim Öffnen: navigator.bluetooth.getDevices() liefert die schon erlaubten Geräte; die gemerkten werden
+//    ohne Tipp verbunden. Mit watchAdvertisements() erst, wenn das Gerät sendet, sonst über die Wiederverbindungsschleife.
+//    Ob Bluefy getDevices()/watchAdvertisements() kann, steht im Protokoll (ble-faehig …); Chrome nur mit Flags.
+// 2. Ohne getDevices: „Alle verbinden“ öffnet nacheinander die Auswahl je fehlendem Gerät, gefiltert auf den
+//    gemerkten Namen (nur ein Eintrag). Verlangt der Browser je Auswahl einen eigenen Tipp, heißt der Knopf danach
+//    „Weiter: HF“ usw.
+const GERAETE = {
+  kickr: {
+    text: "Kickr", knopf: "btnKickr", ble: kickrBle, dienste: [FTMS, CPS],
+    filter: [{ services: [FTMS] }, { services: [CPS] }, { namePrefix: "KICKR" }],
+    g: () => geraet, aus: () => manuellGetrennt, mit: g => kickrMit(g), abo: () => abonnieren(),
+    vorbereiten: g => { kickrBle.gen++; geraet = g; manuellGetrennt = false; kickrAktiv = true; bleHorchen(g, wiederVerbinden); },
+    fertig: () => kickrVerbunden(), stopp: () => { manuellGetrennt = true; kickrAktiv = false; },
+  },
+  hf: {
+    text: "HF", knopf: "btnHf", ble: hfBle, dienste: ["heart_rate"],
+    filter: [{ services: ["heart_rate"] }],
+    g: () => hfGeraet, aus: () => hfManuell, mit: g => hfMit(g), abo: () => hfAbonnieren(),
+    vorbereiten: g => { hfBle.gen++; hfGeraet = g; hfManuell = false; bleHorchen(g, hfWiederVerbinden); },
+    fertig: () => hfVerbunden(), stopp: () => { hfManuell = true; z.hfQuelle = ""; },
+  },
+  kurbel: {
+    text: "Kurbel", knopf: "btnKurbel", ble: kurbelBle, dienste: [CPS],
+    filter: [{ services: [CPS] }],
+    g: () => kurbelGeraet, aus: () => kurbelManuell, mit: g => kurbelMit(g), abo: () => kurbelAbonnieren(),
+    vorbereiten: g => { kurbelBle.gen++; kurbelGeraet = g; kurbelManuell = false; bleHorchen(g, kurbelWiederVerbinden); },
+    fertig: () => kurbelVerbunden(), stopp: () => { kurbelManuell = true; },
+  },
+};
+// Auswahl: einzelne Knöpfe zeigen alle passenden Geräte (anderes Gerät wählbar), „Alle verbinden“ nur das gemerkte
+for (const r of Object.values(GERAETE))
+  r.wahl = (nurGemerkt = false) => {
+    const m = gemerkteGeraete()[Object.keys(GERAETE).find(k => GERAETE[k] === r)];
+    return nurGemerkt && m && m.name ? { filters: [{ name: m.name }], optionalServices: r.dienste }
+                                     : { filters: r.filter, optionalServices: r.dienste };
+  };
+const verbunden = r => !!(r.g() && r.g().gatt.connected);
+// sucht: Wiederverbindungsschleife läuft oder es wird auf das Funksignal gewartet
+const sucht = r => !!(r.g() && !r.g().gatt.connected && !r.aus() && (r.ble.laeuft != null || r.g()._irideWartet));
+
+function gemerkteGeraete() { try { return JSON.parse(localStorage.getItem("iride.geraete") || "{}"); } catch (e) { return {}; } }
+function geraetMerken(rolle, g) {
+  if (!g) return;
+  const m = gemerkteGeraete();
+  if (m[rolle] && m[rolle].id === g.id && m[rolle].name === g.name) return;
+  m[rolle] = { id: g.id, name: g.name || "" };
+  try { localStorage.setItem("iride.geraete", JSON.stringify(m)); } catch (e) {}
+  protokoll(`ble-gemerkt ${rolle}`);
+}
+// Trennmeldung nur einmal je Geräteobjekt anhängen (getDevices und requestDevice können dasselbe Objekt liefern)
+function bleHorchen(g, f) {
+  if (g._irideHorcht === f) return;
+  if (g._irideHorcht) g.removeEventListener("gattserverdisconnected", g._irideHorcht);
+  g.addEventListener("gattserverdisconnected", f); g._irideHorcht = f;
+}
+
+async function geraeteAutomatisch() {
+  const bt = navigator.bluetooth;
+  const gd = !!(bt && bt.getDevices), wa = !!(window.BluetoothDevice && BluetoothDevice.prototype.watchAdvertisements);
+  protokoll(`ble-faehig bluetooth=${bt ? 1 : 0} getDevices=${gd ? 1 : 0} watchAdvertisements=${wa ? 1 : 0}`);
+  if (!gd) return;
+  let liste;
+  try { liste = await bt.getDevices(); } catch (e) { protokoll("ble-erlaubt fehler=" + String(e && e.message || e).replace(/\s+/g, "_").slice(0, 80)); return; }
+  const m = gemerkteGeraete();
+  protokoll(`ble-erlaubt n=${liste.length} gemerkt=${Object.keys(m).join(",") || "-"}`);
+  for (const [rolle, r] of Object.entries(GERAETE)) {
+    if (!m[rolle] || verbunden(r) || sucht(r)) continue;
+    const g = liste.find(d => d.id === m[rolle].id) || liste.find(d => m[rolle].name && d.name === m[rolle].name);
+    if (g) automatischVerbinden(rolle, r, g, wa);
+  }
+}
+async function automatischVerbinden(rolle, r, g, wa) {
+  r.vorbereiten(g);
+  const gen = r.ble.gen;
+  const los = () => {
+    if (r.ble.gen !== gen || r.aus() || g.gatt.connected) return;
+    bleWiederVerbinden(r.ble, g, () => !r.aus(), r.abo, v => status(`${r.text} suchen – Versuch ${v} …`), rolle,
+      () => { status(`${r.text} automatisch verbunden`); r.fertig(); });
+  };
+  if (wa) {
+    // erst verbinden, wenn das Gerät funkt (Chrome verbindet erlaubte Geräte sonst oft nicht: „no longer in range“)
+    try {
+      const abbruch = new AbortController();
+      g._irideWartet = true;
+      g.addEventListener("advertisementreceived", () => { g._irideWartet = false; abbruch.abort(); los(); }, { once: true });
+      await g.watchAdvertisements({ signal: abbruch.signal });
+      protokoll(`ble-auto ${rolle} wartet auf Funksignal`);
+      return;
+    } catch (e) { g._irideWartet = false; protokoll(`ble-auto ${rolle} watch fehler=` + String(e && e.message || e).replace(/\s+/g, "_").slice(0, 60)); }
+  }
+  protokoll(`ble-auto ${rolle} verbinden`);
+  los();
+}
+
+// „Alle verbinden“: je Tipp so viele fehlende Geräte wie der Browser ohne neuen Tipp erlaubt
+const alleUebersprungen = new Set();
+let alleBegonnen = false;
+function alleFehlend() {
+  return Object.keys(GERAETE).filter(k => !verbunden(GERAETE[k]) && !sucht(GERAETE[k]) && !alleUebersprungen.has(k));
+}
+$("btnAlle").onclick = async () => {
+  if (!navigator.bluetooth) { status("kein Web Bluetooth – Bluefy benutzen"); return; }
+  let offen = alleFehlend();
+  if (!offen.length) { alleUebersprungen.clear(); offen = alleFehlend(); }
+  alleBegonnen = true;
+  for (const rolle of offen) {
+    const r = GERAETE[rolle];
+    let neu = null;
+    try {
+      status(`${r.text} wählen …`);
+      neu = await navigator.bluetooth.requestDevice(r.wahl(true));
+      await r.mit(neu);
+      status(`${r.text} verbunden`);
+    } catch (e) {
+      const n = e && e.name, text = String(e && e.message || e);
+      if (n === "SecurityError" || /gesture|user activation/i.test(text)) {
+        status(`${r.text}: noch einmal tippen`);              // Browser will je Auswahl einen eigenen Tipp
+        protokoll(`ble-alle ${rolle} braucht neuen Tipp`);
+      } else {
+        alleUebersprungen.add(rolle);                          // abgebrochen oder nicht gefunden: beim nächsten Tipp das nächste Gerät
+        // verbunden, aber nicht abonniert: trennen, sonst sieht es verbunden aus und liefert nichts
+        if (neu && r.g() === neu) { r.stopp(); if (neu.gatt.connected) neu.gatt.disconnect(); }
+        status(`${r.text}: ${text}`);
+        protokoll(`ble-alle ${rolle} fehler=${n || ""}_` + text.replace(/\s+/g, "_").slice(0, 60));
+      }
+      break;
+    }
+  }
+  knoepfeAktualisieren();
+};
+// Knöpfe nach Zustand: verbundene treten zurück (klein, gedimmt), suchende zeigen „sucht …“
+function knoepfeAktualisieren() {
+  let fehlt = 0;
+  for (const r of Object.values(GERAETE)) {
+    const b = $(r.knopf), v = verbunden(r), s = sucht(r);
+    const t = v ? `${r.text} trennen` : s ? `${r.text} sucht …` : `${r.text} verbinden`;
+    if (b.textContent !== t) b.textContent = t;
+    b.classList.toggle("an", v); b.classList.toggle("zurueck", v); b.classList.toggle("sucht", s);
+    if (!v && !s) fehlt++;
+  }
+  const a = $("btnAlle"), offen = alleFehlend();
+  a.hidden = !fehlt || !navigator.bluetooth;
+  if (!offen.length) { alleBegonnen = false; alleUebersprungen.clear(); }
+  const t = alleBegonnen && offen.length ? `Weiter: ${GERAETE[offen[0]].text}` : "Alle verbinden";
+  if (a.textContent !== t) a.textContent = t;
+}
+
+// Zweite Zeile in der Leistungskachel; ohne Kurbel bleibt die Kachel wie bisher
+function kurbelAnzeige() {
+  const an = !!(kurbelGeraet && kurbelGeraet.gatt.connected) || (kurbelGeraet && !kurbelManuell);
+  const el = $("wKurbel");
+  el.hidden = !an;
+  if (!an) return;
+  if ($("tWatt").textContent.startsWith("Leistung") && !$("tWatt").textContent.startsWith("Leistung Kickr"))
+    $("tWatt").textContent = $("tWatt").textContent.replace(/^Leistung/, "Leistung Kickr");
+  const frisch = Date.now() - z.kurbelZeit < VERALTET_MS;
+  el.innerHTML = frisch && z.wattKurbel != null ? `4iiii <b>${zahl(z.wattKurbel)}</b> W` : "4iiii –";
+}
+// Vergleichszeile je Sekunde: Kickr- und Kurbel-Watt, beide auf diesem iPad gestempelt (t = ms seit 1970)
+function kurbelProtokoll() {
+  const jetzt = Date.now(), kf = jetzt - z.datenZeit < VERALTET_MS, uf = jetzt - z.kurbelZeit < VERALTET_MS;
+  protokoll(`kurbel t=${jetzt} w_kickr=${kf && z.watt != null ? z.watt : ""} w_4iiii=${uf && z.wattKurbel != null ? z.wattKurbel : ""}`
+    + ` kad=${kf && z.kadenz != null ? Math.round(z.kadenz) : ""} kad_4iiii=${uf && z.kadKurbel != null ? Math.round(z.kadKurbel) : ""}`
+    + ` v=${kf && z.tempo != null ? z.tempo.toFixed(1) : ""} dist=${z.dist.toFixed(0)}`
+    + ` grad=${z.kurs ? (steigung(z.dist) * 100).toFixed(1) : ""}`
+    + ` kickrSteigung=${z.kickrSteigung != null ? z.kickrSteigung.toFixed(2) : ""}`
+    + ` kickrSteigungAlter=${z.kickrSteigungZeit ? Math.round((jetzt - z.kickrSteigungZeit) / 1000) : ""}`
+    + ` sim=${z.sim ? 1 : 0}`);
+}
+
+// ------------------------------------------------------------------ Street View
+// Street View (14.11.): zwei langlebige Panorama-Fenster übereinander (getPanorama/setPano kosten bei Google nichts
+// extra, nur das Anlegen der Objekte). Ablauf:
+//  1. svSuchen: Panoramen bis SV_HORIZONT m voraus suchen (Vorrat svv, je Abfrage eine Stelle, alle SV_ABSTAND m).
+//  2. svVorbereiten: das nächste passende Panorama lädt schon im hinteren, unsichtbaren Fenster.
+//  3. svWechseln: erreicht die Position das Panorama, wird das neue Bild über dem alten eingeblendet.
+// Blick, Pitch und ID des sichtbaren Bildes (sv) werden erst beim Wechsel übernommen, das alte Bild schwenkt nicht mit.
+let svPanos = [], svVorn = 0, svDienst = null, svQuelle = null;
+const svZoom = () => blick === 0 ? 1.0 : 0.45;   // Zoom 1 ≈ 90°, 0,45 ≈ 130° Sichtfeld
+const svEl = i => $(i ? "sv2" : "sv");
+const svTangente = d => kurswinkel(punkt(d - 5), punkt(d + 10));   // Straßenrichtung an der Stelle (nicht weit voraus)
+function svSchritt(d) {
+  return Math.abs(winkelDiff(svTangente(d), svTangente(d + 15))) > SV_KURVE ? SV_ABSTAND / 2 : SV_ABSTAND;
+}
+function panoGeladen(pano, id) {
+  return new Promise(ok => {
+    const l = google.maps.event.addListener(pano, "status_changed", () => {
+      if (pano.getPano() !== id) return;
+      google.maps.event.removeListener(l); ok(pano.getStatus());
+    });
+    setTimeout(() => { google.maps.event.removeListener(l); ok("timeout"); }, 4000);
+  });
+}
+
+async function googleLaden(schluessel) {
+  window.gm_authFailure = () => {
+    z.svStatus = "abgelehnt"; layout(false);
+    $("hinweis").textContent = "Google-Schlüssel abgelehnt (Referrer-Einschränkung prüfen)";
+  };
+  await new Promise((ok, fehler) => {
+    window.__googleBereit = ok;
+    const s = document.createElement("script");
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(schluessel)}&v=weekly&loading=async&callback=__googleBereit`;
+    s.onerror = fehler; document.head.appendChild(s);
+  });
+  const lib = await google.maps.importLibrary("streetView");
+  svDienst = new lib.StreetViewService();
+  svQuelle = lib.StreetViewSource ? [lib.StreetViewSource.OUTDOOR] : undefined;
+  svPanos = ["sv", "sv2"].map(id => new lib.StreetViewPanorama($(id), {
+    disableDefaultUI: true, clickToGo: false, linksControl: false, showRoadLabels: false,
+    motionTracking: false, motionTrackingControl: false, scrollwheel: false, visible: true,
+  }));
+  z.svStatus = "bereit";
+}
+
+// Google-Auto fuhr gegen die eigene Richtung (ohne centerHeading: unbekannt, gilt als passend)
+function gegenlaeufig(data, richtung) {
+  const h = data.tiles && data.tiles.centerHeading;
+  return h != null && Math.abs(winkelDiff(richtung, h)) > 90;
+}
+
+// Ersatz in Fahrtrichtung: erst ältere Aufnahmen derselben Stelle (data.time, nicht dokumentiert, daher defensiv),
+// dann die Spur weiter rechts (bei Linksverkehr links). Nichts gefunden: null, das gegenläufige Bild bleibt.
+async function svFahrtrichtung(data, richtung, p, quer) {
+  const passt = d => d && !gegenlaeufig(d, richtung)
+    && abstand({ lat: d.location.latLng.lat(), lon: d.location.latLng.lng() }, p) <= SV_SPUR;
+  const jahr = d => +((d.imageDate || "").slice(0, 4)) || 0;
+  const alt = (Array.isArray(data.time) ? data.time : []).map(t => t && t.pano)
+    .filter(id => id && id !== data.location.pano).reverse().slice(0, SV_ALTERNATIVEN);
+  for (const id of alt) {
+    try {
+      const { data: d } = await svDienst.getPanorama({ pano: id });
+      if (passt(d) && jahr(d) >= SV_ALT_AB) return d;
+    } catch (e) {}
+  }
+  try {
+    const weit = { lat: p.lat + 2.5 * SV_SEITE * Math.cos(quer) / 111320,
+                   lng: p.lon + 2.5 * SV_SEITE * Math.sin(quer) / (111320 * Math.cos(p.lat * RAD)) };
+    const anfrage = { location: weit, radius: SV_SEITE * 2, preference: "nearest" };
+    if (svQuelle) anfrage.sources = svQuelle;
+    const { data: d } = await svDienst.getPanorama(anfrage);
+    if (passt(d)) return d;
+  } catch (e) {}
+  return null;
+}
+
+function svReset() {
+  svv.gen++; Object.assign(svv, { frei: true, bis: -1e9, liste: [], fehler: 0, pause: 0 });
+  svh.kand = null; svh.status = "leer";
+  Object.assign(sv, { id: null, heading: null, panoD: 0, distWechsel: 0 });
+}
+
+// Streckenposition eines Panoramas: nächster Kurspunkt im Fenster ±30 m um die Abfragestelle (2-m-Raster).
+// quer = echter Abstand zur Strecke; ein Serpentinen-Schenkel liegt außerhalb des Fensters und fällt durch SV_SPUR.
+function svStreckenpos(ll, dq) {
+  let best = dq, ba = Infinity;
+  for (let d = Math.max(0, dq - 30); d <= Math.min(z.kurs.laenge, dq + 30); d += 2) {
+    const a = abstand(punkt(d), ll);
+    if (a < ba) { ba = a; best = d; }
+  }
+  return { d: best, quer: ba };
+}
+
+// Ein Panorama für die Stelle dq suchen. undefined: andere Straße (überspringen). Wirft bei Fehlern.
+async function svKandidat(dq) {
+  const p = punkt(dq);
+  // Suchpunkt SV_SEITE m quer zur Fahrtrichtung versetzt (rechts, bei Linksverkehr links)
+  const land = ((z.kursName || "").match(/^Katalog_([a-z]{2})-/i) || [])[1];
+  const quer = (svTangente(dq) + (LINKSVERKEHR.includes((land || "").toLowerCase()) ? -90 : 90)) * RAD;
+  const anfrage = { location: { lat: p.lat + SV_SEITE * Math.cos(quer) / 111320,
+                                lng: p.lon + SV_SEITE * Math.sin(quer) / (111320 * Math.cos(p.lat * RAD)) },
+                    radius: SV_RADIUS, preference: "nearest" };
+  if (svQuelle) anfrage.sources = svQuelle;
+  let { data } = await svDienst.getPanorama(anfrage);
+  const lage = d => svStreckenpos({ lat: d.location.latLng.lat(), lon: d.location.latLng.lng() }, dq);
+  let s = lage(data);
+  if (s.quer > SV_SPUR) return undefined;   // andere Straße
+  if (gegenlaeufig(data, svTangente(s.d))) {
+    const alt = await svFahrtrichtung(data, svTangente(s.d), p, quer);
+    if (alt) { data = alt; s = lage(data); }
+  }
+  const richtung = svTangente(s.d);         // Blick steht je Foto fest, in Fahrtrichtung der Straße am Panorama
+  return { d: s.d, id: data.location.pano, heading: richtung, pitch: Math.atan(steigung(s.d)) / RAD,
+           datum: data.imageDate || "", gegen: gegenlaeufig(data, richtung) };
+}
+
+// Vorrat auffüllen: immer nur eine Abfrage gleichzeitig
+async function svSuchen() {
+  if (!svv.frei || Date.now() < svv.pause) return;
+  const d = pos(), dq = Math.max(svv.bis + svSchritt(Math.max(0, svv.bis)), d);
+  if (dq > Math.min(z.kurs.laenge, d + SV_HORIZONT)) return;
+  svv.frei = false;
+  const gen = svv.gen;
+  let kand, weiter = true;
+  try { kand = await svKandidat(dq); svv.fehler = 0; }
+  catch (e) {
+    if (e && (e.code === "ZERO_RESULTS" || /ZERO_RESULTS/.test(e.message || ""))) kand = { d: dq, id: null };   // hier gibt es kein Panorama
+    else if (++svv.fehler <= 2) { weiter = false; svv.pause = Date.now() + 1500; }   // Netzfehler: gleich noch mal
+    else svv.fehler = 0;
+  }
+  if (gen !== svv.gen) return;              // Kurs gewechselt oder gesprungen: svReset hat svv.frei schon gesetzt
+  svv.frei = true;
+  if (!weiter) return;
+  svv.bis = dq;
+  if (!kand || kand.id === sv.id || (kand.id && svv.liste.some(c => c.id === kand.id))
+      || (svh.kand && svh.kand.id === kand.id)) return;
+  svv.liste.push(kand);
+  svv.liste.sort((a, b) => a.d - b.d);
+}
+
+// Nächstes Panorama im hinteren Fenster laden. Gewählt wird das erste, das bei aktuellem Tempo frühestens nach
+// SV_MIN_MS erreicht wird; davor liegende würden ohnehin überholt (schnelle Fahrt) und fallen weg.
+async function svVorbereiten() {
+  const d = pos(), v = (z.tempo || 0) / 3.6;
+  const warte = Math.max(0, SV_MIN_MS - (Date.now() - sv.zeitWechsel)) / 1000;
+  const ab = sv.id ? d + v * warte - 5 : d - SV_ABSTAND;
+  // Rückfall, wenn die Suche nicht hinterherkommt (langsames Netz): das jüngste Panorama, das noch nah genug ist
+  const kand = svv.liste.find(c => c.id && c.d >= ab)
+    || svv.liste.filter(c => c.id && c.d > sv.panoD && c.d >= d - 2 * SV_ABSTAND).pop();
+  if (!kand) return;
+  svv.liste = svv.liste.filter(c => !c.id || c.d > kand.d);
+  svh.kand = kand; svh.status = "laedt";
+  const gen = svv.gen, hinten = svPanos[1 - svVorn];
+  hinten.setZoom(svZoom());
+  hinten.setPov({ heading: kand.heading, pitch: kand.pitch });
+  let st = "OK";
+  if (hinten.getPano() !== kand.id || hinten.getStatus() !== "OK") {
+    const geladen = panoGeladen(hinten, kand.id);
+    hinten.setPano(kand.id);
+    st = await geladen;
+  }
+  // Google stellt nach dem Laden den Zoom eigenmächtig um (gemessen 0,91 bzw. 1,26 statt 1,0); das neue Bild
+  // blendete dann verstellt ein und svAnimieren zog es Sekundenbruchteile später zurück: Ruck in Gegenrichtung
+  if (st === "OK") { hinten.setPov({ heading: kand.heading, pitch: kand.pitch }); hinten.setZoom(svZoom());
+                     await new Promise(r => setTimeout(r, SV_RENDER_MS)); }
+  if (gen !== svv.gen || svh.kand !== kand) return;
+  if (st === "OK") svh.status = "bereit";
+  else { svh.kand = null; svh.status = "leer"; }   // nicht geladen: verwerfen, das alte Bild bleibt stehen
+}
+
+function svWechseln() {
+  const kand = svh.kand, neu = svPanos[1 - svVorn], elNeu = svEl(1 - svVorn), elAlt = svEl(svVorn);
+  neu.setPov({ heading: kand.heading, pitch: kand.pitch });   // Google setzt den Blick nach dem Laden manchmal um
+  if (Math.abs(neu.getZoom() - svZoom()) > 0.01) neu.setZoom(svZoom());   // … und den Zoom ebenso
+  Object.assign(sv, { id: kand.id, heading: kand.heading, zielHeading: kand.heading, zielPitch: kand.pitch,
+                      panoD: kand.d, distWechsel: pos(), zeitWechsel: Date.now(), datum: kand.datum, skala: 1 });
+  sv.zahl++; if (kand.gegen) sv.gegen++;
+  // altes Bild bleibt deckend, das neue blendet darüber ein
+  elNeu.style.transition = "none"; elNeu.style.transform = "scale(1)"; elNeu.style.opacity = 0;
+  elNeu.style.zIndex = 1; elAlt.style.zIndex = 0;
+  void elNeu.offsetWidth;
+  elNeu.style.transition = ""; elNeu.style.opacity = 1;
+  svVorn = 1 - svVorn;
+  svh.kand = null; svh.status = "blende";
+  // Erst wenn das neue Bild deckend ist, wird das alte versteckt und darf das nächste laden (transitionend;
+  // ein fester Timer kam bei belastetem Hauptthread zu früh: kurz schwarz)
+  const gen = svv.gen;
+  let fertig = false;
+  const abschluss = () => {
+    if (fertig) return;
+    fertig = true; elNeu.removeEventListener("transitionend", ende);
+    elAlt.style.transition = "none"; elAlt.style.opacity = 0; elAlt.style.transform = "scale(1)";
+    void elAlt.offsetWidth; elAlt.style.transition = "";
+    if (gen === svv.gen && svh.status === "blende") svh.status = "leer";
+  };
+  const ende = e => { if (e.propertyName === "opacity") abschluss(); };
+  elNeu.addEventListener("transitionend", ende);
+  setTimeout(abschluss, SV_BLENDE_MS + 2500);   // Rückfall, falls transitionend ausbleibt
+  $("hinweis").textContent = (sv.datum ? `Street View ${sv.datum} · ` : "") + `${sv.zahl} Panoramen`
+    + ` · ${Math.round(100 * (1 - sv.gegen / sv.zahl))} % in Fahrtrichtung`;
+  if (!z.svAn) layout(true);
+}
+
+// Bewegung im Bild: Zoom wie echte Perspektive, Skala = T / (T − x) mit x = gefahrene Meter seit dem Panorama.
+// Damit läuft das Bild genau mit dem Tempo und ist beim nächsten Panorama etwa so groß wie dessen Bild; steht man,
+// steht das Bild. In Kurven weniger (Zoom nach vorn passt dort nicht zur Fahrlinie).
+function svBewegung(d) {
+  if (!sv.id) return;
+  const naechst = svh.kand || svv.liste.find(c => c.id && c.d > sv.panoD);
+  const kurve = naechst ? Math.abs(winkelDiff(sv.heading, naechst.heading)) : 0;
+  const x = Math.min(SV_TIEFE / 2, Math.max(0, d - sv.panoD));
+  const voll = Math.min(KB_MAX, SV_TIEFE / (SV_TIEFE - x));
+  let s = 1 + (voll - 1) * Math.max(0, 1 - kurve / 45);
+  // nur vorwärts: wechselt das Ziel auf ein ferneres Panorama, sinkt f kurz – Bild hält dann still statt zurückzuzoomen
+  // (ausgenommen Sprung zurück mit −100 m)
+  if (d >= sv.distWechsel) s = Math.max(s, sv.skala);
+  if (Math.abs(s - sv.skala) > 0.001) { sv.skala = s; svEl(svVorn).style.transform = `scale(${s.toFixed(4)})`; }
+}
+
+function streetView() {
+  if (z.svStatus !== "bereit" || !z.kurs) return;
+  const d = pos(), v = (z.tempo || 0) / 3.6;
+  if (sv.id && d < sv.distWechsel - 60) svReset();   // Sprung zurück: Vorrat passt nicht mehr
+  svv.liste = svv.liste.filter(c => c.d >= d - 2 * SV_ABSTAND || (!c.id && c.d >= d - SV_ABSTAND));   // weit überholt
+  svSuchen();
+  // kein Panorama an dieser Stelle: große Karte, sofern nicht gleich wieder eins kommt
+  while (svv.liste.length && !svv.liste[0].id && svv.liste[0].d <= d) {
+    svv.liste.shift();
+    const bald = svv.liste.find(c => c.id && c.d <= d + SV_ABSTAND) || (svh.kand && svh.kand.d <= d + SV_ABSTAND);
+    if (!bald) {
+      sv.id = null; sv.heading = null;
+      $("hinweis").textContent = "kein Street-View-Panorama hier";
+      if (z.svAn) layout(false);
+    }
+  }
+  if (svh.status === "leer") svVorbereiten();
+  else if (svh.status === "bereit") {
+    const k = svh.kand;
+    // weit überholt und ein späteres liegt schon bereit im Vorrat: verwerfen und das spätere laden
+    if (d > k.d + 2 * SV_ABSTAND && svv.liste.some(c => c.id && c.d <= d)) { svh.kand = null; svh.status = "leer"; }
+    else if (!sv.id ? k.d <= d + SV_ABSTAND
+             : k.d <= d + v * SV_BLENDE_MS / 2000 && Date.now() - sv.zeitWechsel >= SV_MIN_MS) svWechseln();
+  }
+  svBewegung(d);
+}
+
+// Blick und Zoom festhalten: Street View setzt nach einem Wechsel den Blick gelegentlich nachträglich
+// auf die Aufnahmerichtung des Google-Autos (an Pässen oft bergab = rückwärts); dann zurückstellen
+function svAnimieren() {
+  const svPano = svPanos[svVorn];
+  if (!svPano || !z.svAn || sv.heading == null || svPano.getPano() !== sv.id) return;
+  const pov = svPano.getPov();
+  if (Math.abs(winkelDiff(sv.heading, pov.heading)) > 3 || Math.abs(pov.pitch - sv.zielPitch) > 3)
+    svPano.setPov({ heading: sv.heading, pitch: sv.zielPitch });
+  if (Math.abs(svPano.getZoom() - svZoom()) > 0.01) svPano.setZoom(svZoom());
+}
+setInterval(svAnimieren, 1000);   // Akku: vorher 250 ms
+// Diagnose in der Browser-Konsole: __svDiag() zeigt Position, sichtbares Panorama, hinteres Fenster und Vorrat
+window.__svDiag = () => ({ pos: pos(), v: z.tempo, sv: { ...sv },
+  vorn: svPanos[svVorn] ? { zoom: svPanos[svVorn].getZoom(), pov: svPanos[svVorn].getPov() } : null,
+  hinten: svPanos[1 - svVorn] ? { zoom: svPanos[1 - svVorn].getZoom() } : null, svh: { st: svh.status, d: svh.kand && svh.kand.d },
+  svv: { bis: svv.bis, frei: svv.frei, fehler: svv.fehler, liste: svv.liste.map(c => [Math.round(c.d), c.id ? c.id.slice(0, 4) : null]) } });
+
+// ------------------------------------------------------------------ Bildschirm wach halten
+let sperre = null;
+async function wachHalten() {
+  try { if ("wakeLock" in navigator && !sperre) { sperre = await navigator.wakeLock.request("screen"); sperre.onrelease = () => { sperre = null; }; } }
+  catch (e) { /* nicht verfügbar: Auto-Sperre am iPad ausschalten */ }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && (z.sim || geraet)) wachHalten(); });
+
+// ------------------------------------------------------------------ Start
+window.addEventListener("resize", () => { profilVorbereiten(); karte.invalidateSize(); zeichnen(); svZoomHalten(); });
+// Google passt bei Größenänderung des Fensters (Knopfleiste auf/zu, Overlay) den Zoom an (gemessen 1,0 → 1,26)
+// und svAnimieren holte das erst bis zu 1 s später zurück: sichtbarer Zoom-Ruck. Sofort und nachgezogen setzen.
+function svZoomHalten() {
+  const setzen = () => svPanos.forEach(p => { if (p && Math.abs(p.getZoom() - svZoom()) > 0.01) p.setZoom(svZoom()); });
+  setzen(); requestAnimationFrame(setzen); setTimeout(setzen, 150); setTimeout(setzen, 400);
+}
+(async () => {
+  layout(false);
+  try {
+    const cfg = await (await fetch("api/config")).json();
+    z.masse = cfg.masse || 90;
+    coachKonfigurieren(cfg.coaching);
+    if (cfg.googleMapsKey) {
+      googleLaden(cfg.googleMapsKey).catch(() => { $("hinweis").textContent = "Google Maps nicht ladbar"; });
+    } else {
+      $("hinweis").textContent = "ohne Street View (kein Schlüssel)";
+    }
+    await kurseLaden();
+    // Demo: /?kurs=<datei>&sim=1 (Knopf „Los geht's“ in der Anleitung) wählt den Kurs und startet den Testmodus
+    const q = new URLSearchParams(location.search);
+    if (q.get("kurs") && kurseAlle.some(k => k.datei === q.get("kurs"))) {
+      $("kurs").value = q.get("kurs"); await kursWaehlen(q.get("kurs"), null);
+    }
+    if (q.get("sim") === "1" && !z.sim) $("btnSim").click();
+    if (q.has("kurs") || q.has("sim")) history.replaceState(null, "", location.pathname);
+  } catch (e) {
+    status("Server nicht erreichbar: " + e.message);
+  }
+  setInterval(takt, 200);
+  setInterval(leisteSteuern, 500);
+  setInterval(knoepfeAktualisieren, 500); knoepfeAktualisieren();
+})();
+geraeteAutomatisch();                      // unabhängig vom Server: erlaubte Geräte gleich beim Öffnen suchen
+} // Ende Block
+</script>
+</body>
+</html>

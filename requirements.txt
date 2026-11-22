@@ -1,0 +1,3 @@
+# Nur diese beiden Pakete, installiert von einrichten.py in .venv
+cryptography>=42          # HTTPS-Zertifikate (nur mit --lan)
+garminconnect==0.3.7      # Kurse über Garmin Connect an den Edge (braucht Python 3.12+)

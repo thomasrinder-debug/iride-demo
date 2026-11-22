@@ -1,0 +1,4 @@
+# Shell-Skripte immer mit LF, sonst laufen sie auf dem Mac nicht
+*.sh text eol=lf
+*.command text eol=lf
+*.cmd text eol=crlf
