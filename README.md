@@ -1,8 +1,9 @@
 # iRide Demo
 
-![Alpe d'Huez im Testmodus: 7,6 % in den Kehren, Satellit mit Höhenlinien](docs/titel.jpg)
+![Street View in iRide: Alpe d'Huez unterhalb von Huez, 9,8 % Steigung](docs/streetview.jpg)
 
-<sub>Alpe d'Huez, 13 km, 7,6 % Steigung, 260 W im Testmodus. Satellitenbild © Esri, Höhenlinien aus freien Höhendaten.</sub>
+<sub>Alpe d'Huez, km 10 unterhalb von Huez, 9,8 % Steigung, mit eigenem Google-Schlüssel. Street-View-Bild © Google,
+Karte © OpenStreetMap-Mitwirkende.</sub>
 
 Kickr-Trainingsanzeige im Browser: Street View, Karte, Höhenprofil und Live-Werte vom Wahoo Kickr über Web Bluetooth.
 Mit Testmodus ohne Kickr und fünf Demo-Kursen von leicht bis Tour de France. Der Server läuft lokal auf deinem
@@ -37,11 +38,11 @@ Connect an den Edge. Für den Testmodus brauchst du weder Kickr noch Edge.
 
 ## So sieht es aus
 
-**Mit Street View: Alpe d'Huez**, km 10 unterhalb von Huez, 9,8 % Steigung (mit eigenem Google-Schlüssel):
+**Ohne Google-Schlüssel: Satellit mit Höhenlinien**, Alpe d'Huez bei km 13, 7,6 % in den Kehren:
 
-![Street View in iRide: Alpe d'Huez bei Huez, 9,8 % Steigung](docs/streetview.jpg)
+![Alpe d'Huez im Testmodus: Satellit mit Höhenlinien](docs/titel.jpg)
 
-<sub>Street-View-Bild © Google, Karte © OpenStreetMap-Mitwirkende.</sub>
+<sub>Satellitenbild © Esri, Höhenlinien aus freien Höhendaten.</sub>
 
 **Testmodus auf Alpe d'Huez** (Zeitraffer 20×, Leistung auf 280 W hochgedreht):
 
